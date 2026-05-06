@@ -35,6 +35,17 @@ func TestMetricsEndpointReturnsPrometheusText(t *testing.T) {
 		t.Fatal("expected go runtime metrics in /metrics output")
 	}
 
+	// Initialize the labeled counter so it appears in output.
+	// (CounterVec metrics are invisible until at least one label set is observed.)
+	ClientAccessCount.WithLabelValues("GET", "/healthz").Add(0)
+
+	// Re-scrape after initialization.
+	req = httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	body, _ = io.ReadAll(res.Body)
+	text = string(body)
+
 	// Should contain the custom woms metrics.
 	if !strings.Contains(text, "woms_client_access_count") {
 		t.Fatal("expected woms_client_access_count in /metrics output")

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/c9274326/woms/internal/api"
+	"github.com/d11nn/woms/internal/api"
 )
 
 func main() {

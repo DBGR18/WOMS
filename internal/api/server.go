@@ -13,9 +13,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/c9274326/woms/internal/auth"
-	"github.com/c9274326/woms/internal/domain"
-	"github.com/c9274326/woms/internal/scheduler"
+	"github.com/d11nn/woms/internal/auth"
+	"github.com/d11nn/woms/internal/domain"
+	"github.com/d11nn/woms/internal/metrics"
+	"github.com/d11nn/woms/internal/scheduler"
 )
 
 const dateLayout = "2006-01-02"
@@ -47,6 +48,7 @@ func NewServerWithPublisher(jwtSecret string, store Store, publisher ScheduleJob
 	if publisher == nil {
 		publisher = NoopScheduleJobPublisher{}
 	}
+	metrics.Register()
 	return &Server{jwtSecret: jwtSecret, store: store, publisher: publisher}
 }
 
@@ -82,6 +84,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	setSecurityHeaders(w)
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	// Expose Prometheus metrics endpoint (unauthenticated, for scraping).
+	if r.Method == http.MethodGet && r.URL.Path == "/metrics" {
+		metrics.Handler().ServeHTTP(w, r)
 		return
 	}
 
@@ -176,6 +184,7 @@ func (s *Server) handleOrders(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
+	metrics.ClientAccessCount.WithLabelValues(r.Method, "/api/orders").Inc()
 	switch r.Method {
 	case http.MethodGet:
 		orders := s.store.ListOrders(claims)
@@ -195,6 +204,7 @@ func (s *Server) handleOrders(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		metrics.OrdersSubmittedCount.Inc()
 		writeJSON(w, http.StatusCreated, order)
 	case http.MethodDelete:
 		var req deleteOrdersRequest

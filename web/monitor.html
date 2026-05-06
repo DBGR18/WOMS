@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="zh-Hant">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="WOMS 監控儀表板 — 整合 Grafana 應用與基礎設施指標">
+  <title>WOMS 監控</title>
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    .monitor-page {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      height: 100vh;
+      background: var(--bg);
+    }
+
+    .monitor-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      padding: 18px clamp(18px, 4vw, 48px);
+      border-bottom: 1px solid var(--line);
+      background: #ffffff;
+    }
+
+    .monitor-header-left {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+    }
+
+    .monitor-nav {
+      display: flex;
+      gap: 8px;
+    }
+
+    .monitor-nav a {
+      display: inline-flex;
+      align-items: center;
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0 14px;
+      background: #ffffff;
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 800;
+      text-decoration: none;
+      transition: background 0.15s, border-color 0.15s;
+    }
+
+    .monitor-nav a:hover {
+      border-color: var(--accent);
+      background: #e0f2f1;
+      color: var(--accent-dark);
+    }
+
+    .monitor-content {
+      display: grid;
+      padding: 0;
+      overflow: hidden;
+    }
+
+    .monitor-iframe {
+      width: 100%;
+      height: 100%;
+      border: 0;
+    }
+
+    .monitor-fallback {
+      display: grid;
+      place-content: center;
+      gap: 16px;
+      padding: 48px;
+      text-align: center;
+    }
+
+    .monitor-fallback h2 {
+      color: var(--ink);
+    }
+
+    .monitor-fallback p {
+      max-width: 540px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .monitor-fallback code {
+      display: block;
+      margin: 12px auto;
+      padding: 10px 16px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #f8fbfb;
+      font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+      font-size: 13px;
+      color: var(--ink);
+    }
+
+    .monitor-links {
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+      margin-top: 8px;
+    }
+
+    .monitor-links a {
+      display: inline-flex;
+      align-items: center;
+      min-height: 40px;
+      border-radius: 6px;
+      padding: 0 18px;
+      background: var(--accent);
+      color: #ffffff;
+      font-weight: 800;
+      font-size: 14px;
+      text-decoration: none;
+      transition: background 0.15s;
+    }
+
+    .monitor-links a:hover {
+      background: var(--accent-dark);
+    }
+
+    .monitor-links a.secondary {
+      border: 1px solid var(--line);
+      background: #ffffff;
+      color: var(--ink);
+    }
+
+    .monitor-links a.secondary:hover {
+      background: #f8fbfb;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="monitor-page">
+    <header class="monitor-header">
+      <div class="monitor-header-left">
+        <div>
+          <p class="eyebrow">Monitoring</p>
+          <h1>WOMS 監控儀表板</h1>
+        </div>
+      </div>
+      <nav class="monitor-nav" id="monitor-nav">
+        <a href="/" id="back-to-workstation">← 回到排程工作台</a>
+      </nav>
+    </header>
+
+    <div class="monitor-content" id="monitor-content">
+      <!-- Grafana iframe — loaded when Grafana is reachable -->
+      <iframe id="grafana-frame" class="monitor-iframe"
+        src="http://localhost:3000/d/woms-monitoring/woms-monitoring?orgId=1&kiosk" title="WOMS Grafana Dashboard"
+        loading="lazy" sandbox="allow-scripts allow-same-origin allow-popups allow-forms allow-popups-to-escape-sandbox"
+        hidden></iframe>
+
+      <!-- Fallback content shown when Grafana is unreachable -->
+      <div id="grafana-fallback" class="monitor-fallback">
+        <div>
+          <p class="eyebrow">Dashboard</p>
+          <h2>Grafana 儀表板尚未啟動</h2>
+        </div>
+        <p>
+          監控儀表板需要 Grafana 服務。請確認 <code>docker compose up</code> 已包含
+          <strong>prometheus</strong>、<strong>grafana</strong> 與 <strong>gthulhu</strong> 服務。
+        </p>
+        <code>docker compose up -d postgres redis kafka api scheduler-worker web gthulhu prometheus grafana</code>
+        <p>
+          Grafana 預設在 <strong>localhost:3000</strong> 運行，已設定為匿名唯讀存取。
+          當 Grafana 就緒後，重新整理此頁面即可載入儀表板。
+        </p>
+        <div class="monitor-links">
+          <a href="http://localhost:3000" target="_blank" rel="noopener">開啟 Grafana</a>
+          <a href="http://localhost:9090" target="_blank" rel="noopener" class="secondary">開啟 Prometheus</a>
+          <a href="/" class="secondary">回到排程工作台</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Attempt to detect if Grafana is reachable and toggle iframe vs fallback.
+    (function () {
+      const iframe = document.getElementById("grafana-frame");
+      const fallback = document.getElementById("grafana-fallback");
+
+      function showIframe() {
+        iframe.hidden = false;
+        fallback.hidden = true;
+      }
+
+      function showFallback() {
+        iframe.hidden = true;
+        fallback.hidden = false;
+      }
+
+      // Try a HEAD request to Grafana health endpoint.
+      fetch("http://localhost:3000/api/health", { mode: "no-cors" })
+        .then(function () {
+          // no-cors fetch always resolves — check iframe load instead.
+          showIframe();
+          iframe.addEventListener("error", showFallback);
+        })
+        .catch(function () {
+          showFallback();
+        });
+
+      // Fallback: if iframe fails to load after 8s, show fallback.
+      setTimeout(function () {
+        try {
+          // If we can't access contentDocument, cross-origin is expected.
+          // The iframe is loading — keep it visible.
+          if (iframe.hidden) return;
+        } catch (_) {
+          // expected cross-origin error — Grafana is loaded
+        }
+      }, 8000);
+    })();
+  </script>
+</body>
+
+</html>

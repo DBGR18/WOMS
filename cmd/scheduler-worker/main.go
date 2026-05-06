@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/c9274326/woms/internal/domain"
-	"github.com/c9274326/woms/internal/scheduler"
+	"github.com/d11nn/woms/internal/domain"
+	"github.com/d11nn/woms/internal/scheduler"
 	_ "github.com/lib/pq"
 	"github.com/segmentio/kafka-go"
 )
