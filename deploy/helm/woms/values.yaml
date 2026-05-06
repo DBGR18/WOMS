@@ -190,7 +190,7 @@ monitoring:
     enabled: true
     image:
       repository: prom/prometheus
-      tag: "v2.53.0"
+      tag: "2.53.0"
     scrape:
       # API pods: scrape /metrics on port 8080
       api:
