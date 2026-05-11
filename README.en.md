@@ -130,6 +130,8 @@ Run with Docker Compose:
 docker compose up --build
 ```
 
+Docker Compose starts infrastructure with health gates: PostgreSQL must pass `pg_isready`, Redis must answer `PING`, Kafka must answer a broker query, the API must return `/readyz`, and the web container starts only after the API is healthy.
+
 Default services:
 
 - API: `http://localhost:8080`

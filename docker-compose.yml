@@ -10,11 +10,22 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
 
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
 
   kafka:
     image: apache/kafka:3.8.0
@@ -30,6 +41,12 @@ services:
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
 
   api:
     image: docker.io/${DOCKERHUB_NAMESPACE:-your-dockerhub-namespace}/woms-api:${WOMS_IMAGE_TAG:-latest}
@@ -47,9 +64,19 @@ services:
       KAFKA_SCHEDULE_TOPIC: woms.schedule.jobs
       KAFKA_PUBLISH_ENABLED: "true"
     depends_on:
-      - postgres
-      - redis
-      - kafka
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: on-failure
     ports:
       - "8080:8080"
 
@@ -66,9 +93,13 @@ services:
       WORKER_MIN_JOB_DURATION_MS: "500"
       WORKER_MAX_RETRIES: "3"
     depends_on:
-      - postgres
-      - redis
-      - kafka
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    restart: on-failure
 
   web:
     image: docker.io/${DOCKERHUB_NAMESPACE:-your-dockerhub-namespace}/woms-web:${WOMS_IMAGE_TAG:-latest}
@@ -76,7 +107,15 @@ services:
       context: .
       dockerfile: Dockerfile.web
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8080/"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: on-failure
     ports:
       - "8081:8080"
 
