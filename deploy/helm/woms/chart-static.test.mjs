@@ -44,9 +44,9 @@ test("Helm chart deploys required platform dependencies by default", () => {
 
 test("Default Docker image tags use v-prefixed release tags", () => {
   assert.match(values, /^imageRegistry:\s+docker\.io\/d11nn/m);
-  assert.match(values, /woms-api[\s\S]*tag:\s+v0\.1\.21/);
-  assert.match(values, /woms-scheduler-worker[\s\S]*tag:\s+v0\.1\.21/);
-  assert.match(values, /woms-web[\s\S]*tag:\s+v0\.1\.21/);
+  assert.match(values, /woms-api[\s\S]*tag:\s+v0\.1\.22/);
+  assert.match(values, /woms-scheduler-worker[\s\S]*tag:\s+v0\.1\.22/);
+  assert.match(values, /woms-web[\s\S]*tag:\s+v0\.1\.22/);
   assert.match(apiDeployment, /include "woms\.image"/);
   assert.match(workerDeployment, /include "woms\.image"/);
   assert.match(webDeployment, /include "woms\.image"/);
