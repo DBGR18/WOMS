@@ -59,6 +59,10 @@ const state = {
   calendarDate: calendarDateFromDateKey(dateKeyInTimeZone(new Date(), defaultTimezone)),
 };
 
+let pointerScheduleDrag = null;
+let mouseScheduleDrag = null;
+let suppressNextOrderClick = false;
+
 document.querySelector('input[name="startDate"]').value = tomorrowDateInputValue();
 document.querySelector('input[name="dueDate"]').value = addDaysToDateKey(todayDateInputValue(), 3);
 syncDueDateMinimums();
@@ -536,10 +540,7 @@ async function loadScheduleHistory() {
 }
 
 async function createPreview(requestData, kind) {
-  const payloadData = {
-    ...requestData,
-    currentDate: requestData.currentDate ?? todayDateInputValue(),
-  };
+  const payloadData = { ...requestData };
   const result = await request("/api/schedules/preview", {
     method: "POST",
     body: JSON.stringify(payloadData),
@@ -550,7 +551,7 @@ async function createPreview(requestData, kind) {
     request: {
       lineId: payloadData.lineId,
       startDate: payloadData.startDate,
-      currentDate: result.currentDate ?? payloadData.currentDate,
+      currentDate: result.currentDate ?? payloadData.currentDate ?? todayDateInputValue(),
       orderIds: payloadData.orderIds ?? [],
       resolutionOrderIds: payloadData.resolutionOrderIds ?? [],
       manualForce: payloadData.manualForce === "on" || payloadData.manualForce === true,
@@ -699,7 +700,14 @@ function renderOrderCard(order) {
     ${renderOrderAction(order)}
   `;
   if (selectable) {
-    card.addEventListener("click", () => toggleSelectedOrder(order.id));
+    card.addEventListener("click", (event) => {
+      if (suppressNextOrderClick) {
+        suppressNextOrderClick = false;
+        event.preventDefault();
+        return;
+      }
+      toggleSelectedOrder(order.id);
+    });
     card.addEventListener("dragstart", (event) => {
       const orderIds = draggedOrderIds(order.id);
       event.dataTransfer.setData("application/json", JSON.stringify({ orderIds }));
@@ -711,6 +719,8 @@ function renderOrderCard(order) {
       card.classList.remove("dragging");
       clearCalendarDropTargets();
     });
+    attachPointerScheduleDrag(card, order.id);
+    attachMouseScheduleDrag(card, order.id);
   }
   return card;
 }
@@ -735,14 +745,145 @@ function renderSalesRejectedOrders() {
 }
 
 function draggedOrderIds(orderId) {
-  const selected = Array.from(state.selectedOrderIds).filter((id) => {
-    const order = state.orders.find((item) => item.id === id);
-    return order?.status === "待排程";
-  });
+  const selected = selectedPendingOrderIds();
   if (selected.includes(orderId)) {
     return selected;
   }
   return [orderId];
+}
+
+function selectedPendingOrderIds() {
+  return Array.from(state.selectedOrderIds).filter((id) => {
+    const order = state.orders.find((item) => item.id === id);
+    return order?.status === "待排程";
+  });
+}
+
+function attachPointerScheduleDrag(card, orderId) {
+  card.addEventListener("pointerdown", (event) => {
+    if (event.button !== undefined && event.button !== 0) {
+      return;
+    }
+    if (event.target.closest("button, input, select, textarea, a")) {
+      return;
+    }
+    pointerScheduleDrag = {
+      card,
+      orderIds: draggedOrderIds(orderId),
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      active: false,
+    };
+    card.setPointerCapture?.(event.pointerId);
+  });
+  card.addEventListener("pointermove", (event) => {
+    if (!pointerScheduleDrag || pointerScheduleDrag.pointerId !== event.pointerId) {
+      return;
+    }
+    const distance = Math.hypot(event.clientX - pointerScheduleDrag.startX, event.clientY - pointerScheduleDrag.startY);
+    if (!pointerScheduleDrag.active && distance < 8) {
+      return;
+    }
+    pointerScheduleDrag.active = true;
+    event.preventDefault();
+    card.classList.add("dragging");
+    updatePointerDropTarget(event.clientX, event.clientY);
+  });
+  card.addEventListener("pointerup", async (event) => {
+    if (!pointerScheduleDrag || pointerScheduleDrag.pointerId !== event.pointerId) {
+      return;
+    }
+    const drag = pointerScheduleDrag;
+    pointerScheduleDrag = null;
+    card.releasePointerCapture?.(event.pointerId);
+    card.classList.remove("dragging");
+    clearCalendarDropTargets();
+    if (!drag.active) {
+      return;
+    }
+    suppressNextOrderClick = true;
+    const cell = calendarCellFromPoint(event.clientX, event.clientY);
+    const targetDate = cell?.dataset.date ?? "";
+    if (targetDate && canScheduleOnDate(targetDate)) {
+      await scheduleDroppedOrders(drag.orderIds, targetDate);
+    }
+  });
+  card.addEventListener("pointercancel", (event) => {
+    if (!pointerScheduleDrag || pointerScheduleDrag.pointerId !== event.pointerId) {
+      return;
+    }
+    pointerScheduleDrag = null;
+    card.releasePointerCapture?.(event.pointerId);
+    card.classList.remove("dragging");
+    clearCalendarDropTargets();
+  });
+}
+
+function attachMouseScheduleDrag(card, orderId) {
+  card.addEventListener("mousedown", (event) => {
+    if (pointerScheduleDrag || mouseScheduleDrag || event.button !== 0) {
+      return;
+    }
+    if (event.target.closest("button, input, select, textarea, a")) {
+      return;
+    }
+    mouseScheduleDrag = {
+      card,
+      orderIds: draggedOrderIds(orderId),
+      startX: event.clientX,
+      startY: event.clientY,
+      active: false,
+    };
+    document.addEventListener("mousemove", onMouseScheduleDragMove);
+    document.addEventListener("mouseup", onMouseScheduleDragUp, { once: true });
+  });
+}
+
+function onMouseScheduleDragMove(event) {
+  if (!mouseScheduleDrag) {
+    return;
+  }
+  const distance = Math.hypot(event.clientX - mouseScheduleDrag.startX, event.clientY - mouseScheduleDrag.startY);
+  if (!mouseScheduleDrag.active && distance < 8) {
+    return;
+  }
+  mouseScheduleDrag.active = true;
+  event.preventDefault();
+  mouseScheduleDrag.card.classList.add("dragging");
+  updatePointerDropTarget(event.clientX, event.clientY);
+}
+
+async function onMouseScheduleDragUp(event) {
+  if (!mouseScheduleDrag) {
+    return;
+  }
+  const drag = mouseScheduleDrag;
+  mouseScheduleDrag = null;
+  document.removeEventListener("mousemove", onMouseScheduleDragMove);
+  drag.card.classList.remove("dragging");
+  clearCalendarDropTargets();
+  if (!drag.active) {
+    return;
+  }
+  suppressNextOrderClick = true;
+  const cell = calendarCellFromPoint(event.clientX, event.clientY);
+  const targetDate = cell?.dataset.date ?? "";
+  if (targetDate && canScheduleOnDate(targetDate)) {
+    await scheduleDroppedOrders(drag.orderIds, targetDate);
+  }
+}
+
+function updatePointerDropTarget(clientX, clientY) {
+  clearCalendarDropTargets();
+  const cell = calendarCellFromPoint(clientX, clientY);
+  if (cell?.dataset.date && canScheduleOnDate(cell.dataset.date)) {
+    cell.classList.add("drop-target");
+  }
+}
+
+function calendarCellFromPoint(clientX, clientY) {
+  return document.elementFromPoint(clientX, clientY)?.closest?.(".calendar-day") ?? null;
 }
 
 function toggleSelectedOrder(orderId) {
@@ -894,6 +1035,15 @@ function renderCalendar() {
       event.preventDefault();
       cell.classList.remove("drop-target");
       const orderIds = droppedOrderIds(event.dataTransfer);
+      if (orderIds.length > 0 && canScheduleOnDate(day.key)) {
+        await scheduleDroppedOrders(orderIds, day.key);
+      }
+    });
+    cell.addEventListener("click", async (event) => {
+      if (event.target.closest("[data-calendar-order-id]")) {
+        return;
+      }
+      const orderIds = selectedPendingOrderIds();
       if (orderIds.length > 0 && canScheduleOnDate(day.key)) {
         await scheduleDroppedOrders(orderIds, day.key);
       }

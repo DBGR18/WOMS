@@ -438,6 +438,7 @@ button:hover {
 
 .order-card.selectable {
   cursor: pointer;
+  touch-action: none;
 }
 
 .order-card.selectable:hover {

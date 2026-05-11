@@ -10,6 +10,7 @@ WOMS 是晶圓訂單管理與排程系統，必須以最終部署型態開發：
 - 功能分支使用 `feat/xxxx-xxxx` 命名，例如 `feat/woms-foundation`。
 - 建立或重整 feature branch 前，先 `git fetch origin` 並確認 `origin/main` 是最新；不要直接從過時的本地 `main` 切分支。這次 `feat/scheduling-calendar-fixes` 一度出現 `1 ahead, 3 behind`，原因是它先從舊的本地 `main` 分出去，等 `origin/main` 後來前進後才需要 rebase 才能正常開 PR。
 - PR 標題與 commit message 前綴使用 `feat: xxxx`，不要使用 `[feat] xxxx` 或 `[codex] xxxx`。
+- 每次 PR message 必須說明做了什麼事，格式使用 `feat: xxxx` 作為標題，內文用條列列出主要變更，例如 `- xxxx`。
 - `main` 必須存在並設定保護；所有功能都應透過 PR 進入 `main`，讓 CI bot 檢查。
 - Docker Hub publish 不應在 feature branch push 執行，只能在 `main`、`release/**` 或手動 workflow 執行。
 - 每完成一項功能都必須執行可用測試、更新 README、更新 `.gitignore`、`git add`、commit、push。
@@ -52,6 +53,7 @@ WOMS is a wafer order management and scheduling system. It must be built in the 
 - Feature branches use `feat/xxxx-xxxx`, for example `feat/woms-foundation`.
 - Before creating or rebasing a feature branch, run `git fetch origin` and confirm `origin/main` is current; do not branch from a stale local `main`. This `feat/scheduling-calendar-fixes` incident showed up as `1 ahead, 3 behind` because the branch was cut from an old local `main`, and once `origin/main` moved forward the branch had to be rebased before a PR could be opened cleanly.
 - PR titles and commit messages use the `feat: xxxx` prefix. Do not use `[feat] xxxx` or `[codex] xxxx`.
+- Every PR message must explain what changed: use `feat: xxxx` as the title and list the main changes in bullet points, for example `- xxxx`.
 - `main` must exist and be protected; all features should enter `main` through PRs so the CI bot can check them.
 - Docker Hub publishing must not run on feature branch pushes. It runs only on `main`, `release/**`, or manual workflow dispatch.
 - After every completed feature, run available tests, update README, update `.gitignore`, `git add`, commit, and push.

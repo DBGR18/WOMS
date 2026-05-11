@@ -14,7 +14,7 @@ server {
 
     location /api/ {
         set $api_upstream http://${API_UPSTREAM};
-        proxy_pass $api_upstream/api/;
+        proxy_pass $api_upstream;
         proxy_connect_timeout 3s;
         proxy_read_timeout 30s;
         proxy_next_upstream error timeout http_502 http_503 http_504;

@@ -93,6 +93,7 @@ cp .env.example .env
 - `WORKER_MAX_RETRIES`：worker 遇到暫時性 DB/Kafka 錯誤時的最大重試次數。
 - `DOCKERHUB_NAMESPACE`：Docker Hub namespace。
 - `WOMS_IMAGE_TAG`：Docker Compose 使用的 image tag，預設 `latest`。
+- `API_UPSTREAM`：web NGINX 代理 API 的 upstream；Docker Compose 會設定為 `api:8080`。
 
 GitHub Actions Docker Hub 設定：
 

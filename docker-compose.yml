@@ -106,6 +106,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.web
+    environment:
+      API_UPSTREAM: ${API_UPSTREAM:-api:8080}
     depends_on:
       api:
         condition: service_healthy
