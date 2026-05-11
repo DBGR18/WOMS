@@ -315,6 +315,81 @@ func (s *PostgresStore) ResubmitOrder(req resubmitOrderRequest, claims auth.Clai
 	return order, nil
 }
 
+func (s *PostgresStore) CreateDemoConflictOrders(req demoConflictRequest, claims auth.Claims) ([]domain.Order, error) {
+	lineID := req.LineID
+	if lineID == "" && claims.Role == domain.RoleScheduler {
+		lineID = claims.LineID
+	}
+	if claims.Role == domain.RoleScheduler && lineID != claims.LineID {
+		return nil, errors.New("cannot create demo orders for another production line")
+	}
+	line, err := s.productionLine(lineID)
+	if err != nil {
+		return nil, err
+	}
+	if req.Count == 0 {
+		req.Count = 6
+	}
+	if req.Count < 5 || req.Count > 20 {
+		return nil, errors.New("count must be between 5 and 20")
+	}
+	currentDate, err := currentDateInLineTimezone(line, nowUTC())
+	if err != nil {
+		return nil, err
+	}
+	if req.DueDate == "" {
+		req.DueDate = currentDate.AddDate(0, 0, 1).Format(dateLayout)
+	}
+	dueDate, err := validateFutureDueDate(req.DueDate, currentDate)
+	if err != nil {
+		return nil, err
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	now := time.Now().UTC()
+	orders := make([]domain.Order, 0, req.Count)
+	for index := 1; index <= req.Count; index++ {
+		createdAt := now.Add(time.Duration(index) * time.Nanosecond)
+		order := domain.Order{
+			ID:        "ORD-" + strconv.FormatInt(createdAt.UnixNano(), 10),
+			Customer:  "Conflict Demo " + strconv.Itoa(index),
+			LineID:    lineID,
+			Quantity:  2500,
+			Priority:  domain.PriorityLow,
+			Status:    domain.StatusPending,
+			DueDate:   dueDate,
+			CreatedBy: claims.Subject,
+			CreatedAt: createdAt,
+			UpdatedAt: createdAt,
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO orders (id, customer, line_id, quantity, priority, status, due_date, note, created_by, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, '', $8, $9, $9)
+		`, order.ID, order.Customer, order.LineID, order.Quantity, order.Priority, order.Status, order.DueDate, order.CreatedBy, order.CreatedAt); err != nil {
+			return nil, err
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO audit_logs (id, actor_id, action, resource, reason, created_at)
+			VALUES ($1, $2, 'order.create_demo_conflict', $3, $4, $5)
+		`, "AUD-"+order.ID, claims.Subject, order.ID, req.DueDate, order.CreatedAt); err != nil {
+			return nil, err
+		}
+		orders = append(orders, order)
+	}
+	if _, err := tx.Exec("UPDATE production_lines SET schedule_revision = schedule_revision + 1 WHERE id = $1", lineID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return orders, nil
+}
+
 func (s *PostgresStore) DeleteOrders(req deleteOrdersRequest, claims auth.Claims) (deleteOrdersResponse, error) {
 	if len(req.OrderIDs) == 0 {
 		return deleteOrdersResponse{}, errors.New("orderIds is required")
