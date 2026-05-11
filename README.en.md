@@ -93,6 +93,7 @@ Important settings:
 - `WORKER_MAX_RETRIES`: maximum worker retries for transient DB/Kafka errors.
 - `DOCKERHUB_NAMESPACE`: Docker Hub namespace.
 - `WOMS_IMAGE_TAG`: Docker image tag used by Docker Compose. Defaults to `latest` so Compose builds and local runs stay aligned with the Docker Hub `latest` tag.
+- `API_UPSTREAM`: web NGINX upstream for API proxying. Docker Compose sets this to `api:8080`.
 
 GitHub Actions Docker Hub settings:
 

@@ -49,6 +49,32 @@ test("front-end visible HPA status labels are zh-TW", () => {
   assert.equal(html.includes(">Sales Follow-up<"), false);
 });
 
+test("web nginx proxy preserves API request paths", () => {
+  const nginx = readFileSync(new URL("./nginx.conf.template", import.meta.url), "utf8");
+  assert.match(nginx, /location \/api\/ \{/);
+  assert.match(nginx, /set \$api_upstream http:\/\/\$\{API_UPSTREAM\};/);
+  assert.match(nginx, /proxy_pass \$api_upstream;/);
+  assert.doesNotMatch(nginx, /proxy_pass \$api_upstream\/api\//);
+});
+
+test("order cards support pointer fallback drag scheduling", () => {
+  const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");
+  const styles = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
+  assert.match(app, /attachPointerScheduleDrag\(card, order\.id\)/);
+  assert.match(app, /attachMouseScheduleDrag\(card, order\.id\)/);
+  assert.equal(app.includes('document.elementFromPoint(clientX, clientY)?.closest?.(".calendar-day")'), true);
+  assert.match(app, /await scheduleDroppedOrders\(drag\.orderIds, targetDate\)/);
+  assert.match(app, /const orderIds = selectedPendingOrderIds\(\)/);
+  assert.match(app, /document\.addEventListener\("mousemove", onMouseScheduleDragMove\)/);
+  assert.match(styles, /\.order-card\.selectable\s*\{[\s\S]*touch-action:\s+none;/);
+});
+
+test("schedule preview uses API currentDate as the confirmation payload source", () => {
+  const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");
+  assert.doesNotMatch(app, /currentDate:\s*requestData\.currentDate\s*\?\?\s*todayDateInputValue\(\)/);
+  assert.match(app, /currentDate:\s*result\.currentDate\s*\?\?\s*payloadData\.currentDate\s*\?\?\s*todayDateInputValue\(\)/);
+});
+
 const order = {
   id: "ORD-1",
   customer: "ACME Silicon",

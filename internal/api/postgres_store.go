@@ -494,6 +494,11 @@ func (s *PostgresStore) ensurePreviewLoaded(previewID string) error {
 }
 
 func (s *PostgresStore) PreviewSchedule(req scheduleRequest, claims auth.Claims) (schedulePreviewResponse, error) {
+	var err error
+	req, err = s.defaultScheduleCurrentDateLocked(req, claims, nowUTC())
+	if err != nil {
+		return schedulePreviewResponse{}, err
+	}
 	result, preview, err := s.previewFromDB(req, claims)
 	if err != nil {
 		return schedulePreviewResponse{}, err
@@ -519,6 +524,7 @@ func (s *PostgresStore) PreviewSchedule(req scheduleRequest, claims auth.Claims)
 	}
 	return schedulePreviewResponse{
 		PreviewID:   preview.ID,
+		CurrentDate: req.CurrentDate,
 		Allocations: result.Allocations,
 		Conflicts:   result.Conflicts,
 		FinishDate:  result.FinishDate,
