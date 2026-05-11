@@ -160,7 +160,7 @@ Frontend behavior:
 Persistence note:
 
 - Docker Compose PostgreSQL uses the `postgres-data` named volume, so local database data survives container restarts.
-- The current foundation API still uses an in-memory store. PostgreSQL migrations and seed files are present, but API persistence wiring is a later feature slice.
+- Docker Compose runs the API against PostgreSQL by default. Startup migrations are idempotent and upgrade existing local volumes, including older role constraints and `schedule_allocations` tables that were created before allocation status tracking existed.
 - The Helm chart currently consumes `DATABASE_URL`; it does not yet deploy a PostgreSQL StatefulSet/PVC.
 
 ## Docker Build

@@ -98,7 +98,13 @@ ALTER TABLE schedule_jobs ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NUL
 ALTER TABLE schedule_jobs ADD COLUMN IF NOT EXISTS order_ids JSONB NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE schedule_jobs ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
 ALTER TABLE schedule_jobs ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+ALTER TABLE schedule_allocations ADD COLUMN IF NOT EXISTS status TEXT;
+UPDATE schedule_allocations
+SET status = '已排程'
+WHERE status IS NULL;
 
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
+ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('admin', 'sales', 'scheduler'));
 ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_status_check;
 ALTER TABLE orders ADD CONSTRAINT orders_status_check CHECK (status IN ('待排程', '已排程', '生產中', '已完成', '需業務處理'));
 ALTER TABLE schedule_jobs DROP CONSTRAINT IF EXISTS schedule_jobs_status_check;
