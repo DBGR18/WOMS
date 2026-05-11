@@ -13,6 +13,12 @@ const kafkaTopicJob = readFileSync(new URL("./templates/kafka-topic-job.yaml", i
 const secret = readFileSync(new URL("./templates/secret.yaml", import.meta.url), "utf8");
 const notes = readFileSync(new URL("./templates/NOTES.txt", import.meta.url), "utf8");
 
+function imageTag(section) {
+  const match = values.match(new RegExp(`${section}:\\n[\\s\\S]*?image:\\n[\\s\\S]*?tag:\\s+([^\\s]+)`));
+  assert.ok(match, `missing ${section}.image.tag`);
+  return match[1];
+}
+
 test("Helm values keep async scheduling and HPA demo defaults wired", () => {
   assert.match(values, /store:\s+postgres/);
   assert.match(values, /databaseUrl:\s+postgres:\/\/woms:woms@postgres:5432\/woms\?sslmode=disable/);
@@ -44,9 +50,10 @@ test("Helm chart deploys required platform dependencies by default", () => {
 
 test("Default Docker image tags use v-prefixed release tags", () => {
   assert.match(values, /^imageRegistry:\s+docker\.io\/d11nn/m);
-  assert.match(values, /woms-api[\s\S]*tag:\s+v0\.1\.21/);
-  assert.match(values, /woms-scheduler-worker[\s\S]*tag:\s+v0\.1\.21/);
-  assert.match(values, /woms-web[\s\S]*tag:\s+v0\.1\.21/);
+  const apiTag = imageTag("api");
+  assert.match(apiTag, /^v0\.1\.\d+$/);
+  assert.equal(imageTag("worker"), apiTag);
+  assert.equal(imageTag("web"), apiTag);
   assert.match(apiDeployment, /include "woms\.image"/);
   assert.match(workerDeployment, /include "woms\.image"/);
   assert.match(webDeployment, /include "woms\.image"/);

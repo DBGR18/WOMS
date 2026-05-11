@@ -131,6 +131,8 @@ JWT_SECRET=local-dev-secret go run ./cmd/api
 docker compose up --build
 ```
 
+Docker Compose 會透過 health gate 啟動基礎服務：PostgreSQL 必須通過 `pg_isready`，Redis 必須回應 `PING`，Kafka 必須能回應 broker query，API 必須回傳 `/readyz`，Web container 會等 API healthy 後才啟動。
+
 預設服務：
 
 - API：`http://localhost:8080`
