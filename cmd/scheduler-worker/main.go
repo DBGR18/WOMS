@@ -310,44 +310,89 @@ func persistPreviewAllocations(ctx context.Context, tx *sql.Tx, job domain.Sched
 }
 
 func backfillQueuedJobs(ctx context.Context, db *sql.DB, maxRetries int) error {
-	rows, err := db.QueryContext(ctx, `
-		SELECT id, line_id, COALESCE(source, ''), COALESCE(preview_id, ''),
-		       COALESCE(request_hash, ''), line_revision, order_ids, created_at, updated_at
-		FROM schedule_jobs
-		WHERE status = 'queued'
-		ORDER BY created_at
-	`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var job domain.ScheduleJob
-		var orderIDsJSON []byte
-		if err := rows.Scan(
-			&job.ID,
-			&job.LineID,
-			&job.Source,
-			&job.PreviewID,
-			&job.RequestHash,
-			&job.LineRevision,
-			&orderIDsJSON,
-			&job.CreatedAt,
-			&job.UpdatedAt,
-		); err != nil {
-			return err
+	const backfillBatchSize = 100
+
+	var (
+		lastCreatedAt time.Time
+		lastID        string
+		hasCursor     bool
+	)
+
+	for {
+		var (
+			rows *sql.Rows
+			err  error
+		)
+
+		if hasCursor {
+			rows, err = db.QueryContext(ctx, `
+				SELECT id, line_id, COALESCE(source, ''), COALESCE(preview_id, ''),
+				       COALESCE(request_hash, ''), line_revision, order_ids, created_at, updated_at
+				FROM schedule_jobs
+				WHERE status = 'queued'
+				  AND (created_at > $1 OR (created_at = $1 AND id > $2))
+				ORDER BY created_at, id
+				LIMIT $3
+			`, lastCreatedAt, lastID, backfillBatchSize)
+		} else {
+			rows, err = db.QueryContext(ctx, `
+				SELECT id, line_id, COALESCE(source, ''), COALESCE(preview_id, ''),
+				       COALESCE(request_hash, ''), line_revision, order_ids, created_at, updated_at
+				FROM schedule_jobs
+				WHERE status = 'queued'
+				ORDER BY created_at, id
+				LIMIT $1
+			`, backfillBatchSize)
 		}
-		_ = json.Unmarshal(orderIDsJSON, &job.OrderIDs)
-		job.Status = domain.JobQueued
-		payload, err := json.Marshal(job)
 		if err != nil {
 			return err
 		}
-		if err := processDBJob(ctx, db, payload, maxRetries); err != nil {
-			log.Printf("scheduler backfill job failed id=%s error=%v", job.ID, err)
+
+		batchCount := 0
+		for rows.Next() {
+			var job domain.ScheduleJob
+			var orderIDsJSON []byte
+			if err := rows.Scan(
+				&job.ID,
+				&job.LineID,
+				&job.Source,
+				&job.PreviewID,
+				&job.RequestHash,
+				&job.LineRevision,
+				&orderIDsJSON,
+				&job.CreatedAt,
+				&job.UpdatedAt,
+			); err != nil {
+				rows.Close()
+				return err
+			}
+			_ = json.Unmarshal(orderIDsJSON, &job.OrderIDs)
+			job.Status = domain.JobQueued
+			payload, err := json.Marshal(job)
+			if err != nil {
+				rows.Close()
+				return err
+			}
+			if err := processDBJob(ctx, db, payload, maxRetries); err != nil {
+				log.Printf("scheduler backfill job failed id=%s error=%v", job.ID, err)
+			}
+
+			lastCreatedAt = job.CreatedAt
+			lastID = job.ID
+			hasCursor = true
+			batchCount++
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if batchCount < backfillBatchSize {
+			return nil
 		}
 	}
-	return rows.Err()
 }
 
 type errStaleScheduleData struct{}
