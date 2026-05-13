@@ -35,10 +35,6 @@ func TestMetricsEndpointReturnsPrometheusText(t *testing.T) {
 		t.Fatal("expected go runtime metrics in /metrics output")
 	}
 
-	// Initialize the labeled counter so it appears in output.
-	// (CounterVec metrics are invisible until at least one label set is observed.)
-	ClientAccessCount.WithLabelValues("GET", "/healthz").Add(0)
-
 	// Re-scrape after initialization.
 	req = httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	res = httptest.NewRecorder()
@@ -47,11 +43,8 @@ func TestMetricsEndpointReturnsPrometheusText(t *testing.T) {
 	text = string(body)
 
 	// Should contain the custom woms metrics.
-	if !strings.Contains(text, "woms_client_access_count") {
-		t.Fatal("expected woms_client_access_count in /metrics output")
-	}
-	if !strings.Contains(text, "woms_orders_submitted_count") {
-		t.Fatal("expected woms_orders_submitted_count in /metrics output")
+	if !strings.Contains(text, "woms_current_online_user_count") {
+		t.Fatal("expected woms_current_online_user_count in /metrics output")
 	}
 }
 
@@ -63,24 +56,26 @@ func TestCustomCountersIncrement(t *testing.T) {
 	Register()
 
 	// Reset counters for this test by gathering baseline.
-	before := gatherCounterValue(t, "woms_orders_submitted_count")
-	OrdersSubmittedCount.Inc()
-	OrdersSubmittedCount.Inc()
-	after := gatherCounterValue(t, "woms_orders_submitted_count")
+	before := gatherGuageValue(t, "woms_current_online_user_count")
+	CurrentOnlineUserCount.Inc()
+	CurrentOnlineUserCount.Inc()
+	after := gatherGuageValue(t, "woms_current_online_user_count")
 
 	delta := after - before
 	if delta != 2 {
-		t.Fatalf("expected orders_submitted_count to increase by 2, got delta %f", delta)
+		t.Fatalf("expected current_online_user_count to increase by 2, got delta %f", delta)
 	}
 
 	// Test labeled counter.
-	ClientAccessCount.WithLabelValues("GET", "/api/orders").Inc()
-	accessVal := gatherLabeledCounterValue(t, "woms_client_access_count", map[string]string{
+	HTTPRequestsTotal.WithLabelValues("GET", "/api/orders", "200").Inc()
+	accessVal := gatherLabeledCounterValue(t, "woms_http_requests_total", map[string]string{
 		"method": "GET",
 		"path":   "/api/orders",
+		"status": "200",
 	})
+
 	if accessVal < 1 {
-		t.Fatalf("expected client_access_count >= 1, got %f", accessVal)
+		t.Fatalf("expected HTTPRequestsTotal >= 1, got %f", accessVal)
 	}
 }
 
@@ -124,7 +119,7 @@ func TestRegistrySupportsNewMetricTypes(t *testing.T) {
 // Helpers
 // ────────────────────────────────────────────────────────────────────
 
-func gatherCounterValue(t *testing.T, name string) float64 {
+func gatherGuageValue(t *testing.T, name string) float64 {
 	t.Helper()
 	families, err := Registry.Gather()
 	if err != nil {
@@ -133,8 +128,8 @@ func gatherCounterValue(t *testing.T, name string) float64 {
 	for _, family := range families {
 		if family.GetName() == name {
 			metrics := family.GetMetric()
-			if len(metrics) > 0 && metrics[0].GetCounter() != nil {
-				return metrics[0].GetCounter().GetValue()
+			if len(metrics) > 0 && metrics[0].GetGauge() != nil {
+				return metrics[0].GetGauge().GetValue()
 			}
 		}
 	}

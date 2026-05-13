@@ -52,6 +52,26 @@ func NewServerWithPublisher(jwtSecret string, store Store, publisher ScheduleJob
 	return &Server{jwtSecret: jwtSecret, store: store, publisher: publisher}
 }
 
+// statusRecorder wraps http.ResponseWriter to capture the HTTP status code
+// written by a handler so ServeHTTP can record it in HTTPRequestsTotal.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+// Write captures an implicit 200 if WriteHeader was never called.
+func (r *statusRecorder) Write(b []byte) (int, error) {
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
+	return r.ResponseWriter.Write(b)
+}
+
 type Store interface {
 	Authenticate(username, password string) (domain.User, bool)
 	ListOrders(claims auth.Claims) []domain.Order
@@ -93,49 +113,59 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Wrap the writer to capture the response status for HTTPRequestsTotal.
+	rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+	defer func() {
+		metrics.HTTPRequestsTotal.WithLabelValues(
+			r.Method,
+			r.URL.Path,
+			strconv.Itoa(rec.status),
+		).Inc()
+	}()
+
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/healthz":
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		writeJSON(rec, http.StatusOK, map[string]string{"status": "ok"})
 	case r.Method == http.MethodGet && r.URL.Path == "/readyz":
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+		writeJSON(rec, http.StatusOK, map[string]string{"status": "ready"})
 	case r.Method == http.MethodPost && r.URL.Path == "/api/auth/login":
-		s.handleLogin(w, r)
+		s.handleLogin(rec, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/internal/auth/verify":
-		s.handleIngressAuth(w, r)
+		s.handleIngressAuth(rec, r)
 	case r.URL.Path == "/api/orders":
-		s.handleOrders(w, r)
+		s.handleOrders(rec, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/lines":
-		s.handleLines(w, r)
+		s.handleLines(rec, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/orders/preview-confirm":
-		s.handleConfirmPreviewOrder(w, r)
+		s.handleConfirmPreviewOrder(rec, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/orders/reject":
-		s.handleRejectOrders(w, r)
+		s.handleRejectOrders(rec, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/orders/resubmit":
-		s.handleResubmitOrder(w, r)
+		s.handleResubmitOrder(rec, r)
 	case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/orders/"):
-		s.handleUpdateOrder(w, r)
+		s.handleUpdateOrder(rec, r)
 	case r.URL.Path == "/api/users":
-		s.handleUsers(w, r)
+		s.handleUsers(rec, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/demo/conflict-orders":
-		s.handleDemoConflictOrders(w, r)
+		s.handleDemoConflictOrders(rec, r)
 	case r.URL.Path == "/api/demo/hpa-peak":
-		s.handleHPAPeakDemo(w, r)
+		s.handleHPAPeakDemo(rec, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/schedules/preview":
-		s.handleSchedulePreview(w, r)
+		s.handleSchedulePreview(rec, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/schedules/calendar":
-		s.handleScheduleCalendar(w, r)
+		s.handleScheduleCalendar(rec, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/schedules/history":
-		s.handleScheduleHistory(w, r)
+		s.handleScheduleHistory(rec, r)
 	case r.URL.Path == "/api/schedules/jobs":
-		s.handleScheduleJobs(w, r)
+		s.handleScheduleJobs(rec, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/schedules/jobs/"):
-		s.handleGetScheduleJob(w, r)
+		s.handleGetScheduleJob(rec, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/production/confirm":
-		s.handleProductionConfirm(w, r)
+		s.handleProductionConfirm(rec, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/production/start":
-		s.handleProductionStart(w, r)
+		s.handleProductionStart(rec, r)
 	default:
-		writeError(w, http.StatusNotFound, "route not found")
+		writeError(rec, http.StatusNotFound, "route not found")
 	}
 }
 
@@ -164,6 +194,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	metrics.CurrentOnlineUserCount.Inc()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"token": token,
 		"user":  user,
@@ -184,7 +215,6 @@ func (s *Server) handleOrders(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	metrics.ClientAccessCount.WithLabelValues(r.Method, "/api/orders").Inc()
 	switch r.Method {
 	case http.MethodGet:
 		orders := s.store.ListOrders(claims)
@@ -204,7 +234,6 @@ func (s *Server) handleOrders(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		metrics.OrdersSubmittedCount.Inc()
 		writeJSON(w, http.StatusCreated, order)
 	case http.MethodDelete:
 		var req deleteOrdersRequest

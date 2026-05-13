@@ -28,31 +28,12 @@ func init() {
 var (
 	registerOnce sync.Once
 
-	// ClientAccessCount counts authenticated API accesses.
-	ClientAccessCount = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
+	// CurrentOnlineUserCount tracks the number of currently online users.
+	CurrentOnlineUserCount = prometheus.NewGauge(
+		prometheus.GaugeOpts{
 			Namespace: "woms",
-			Name:      "client_access_count",
-			Help:      "Total number of authenticated API accesses.",
-		},
-		[]string{"method", "path"},
-	)
-
-	// OrdersSubmittedCount counts successfully created orders.
-	OrdersSubmittedCount = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "woms",
-			Name:      "orders_submitted_count",
-			Help:      "Total number of orders submitted via the API.",
-		},
-	)
-
-	// ScheduleJobsCreatedCount counts schedule jobs created.
-	ScheduleJobsCreatedCount = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "woms",
-			Name:      "schedule_jobs_created_count",
-			Help:      "Total number of schedule jobs created.",
+			Name:      "current_online_user_count",
+			Help:      "Current number of online users.",
 		},
 	)
 
@@ -71,9 +52,7 @@ var (
 // call from multiple goroutines.
 func Register() {
 	registerOnce.Do(func() {
-		Registry.MustRegister(ClientAccessCount)
-		Registry.MustRegister(OrdersSubmittedCount)
-		Registry.MustRegister(ScheduleJobsCreatedCount)
+		Registry.MustRegister(CurrentOnlineUserCount)
 		Registry.MustRegister(HTTPRequestsTotal)
 	})
 }
