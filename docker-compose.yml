@@ -92,6 +92,7 @@ services:
       DATABASE_URL: postgres://woms:woms@postgres:5432/woms?sslmode=disable
       WORKER_MIN_JOB_DURATION_MS: "500"
       WORKER_MAX_RETRIES: "3"
+      WORKER_START_OFFSET: ${WORKER_START_OFFSET:-latest}
     depends_on:
       postgres:
         condition: service_healthy

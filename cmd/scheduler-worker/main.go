@@ -24,6 +24,17 @@ func main() {
 	minJobDuration := envDuration("WORKER_MIN_JOB_DURATION_MS", 0)
 	maxRetries := envInt("WORKER_MAX_RETRIES", 3)
 	backfillInterval := envDuration("WORKER_BACKFILL_INTERVAL_MS", 5*time.Second)
+	startOffsetLabel := strings.ToLower(strings.TrimSpace(env("WORKER_START_OFFSET", "latest")))
+	startOffset := kafka.LastOffset
+	switch startOffsetLabel {
+	case "earliest", "first", "oldest":
+		startOffset = kafka.FirstOffset
+	case "latest", "last", "newest", "":
+		startOffset = kafka.LastOffset
+	default:
+		log.Printf("invalid WORKER_START_OFFSET=%q, defaulting to latest", startOffsetLabel)
+		startOffset = kafka.LastOffset
+	}
 	var db *sql.DB
 	if databaseURL != "" {
 		var err error
@@ -48,7 +59,7 @@ func main() {
 		// Ensure the consumer picks up topics/partitions created after startup.
 		WatchPartitionChanges:  true,
 		PartitionWatchInterval: 5 * time.Second,
-		StartOffset:            kafka.FirstOffset,
+		StartOffset:            startOffset,
 	})
 	defer reader.Close()
 	if db != nil && backfillInterval > 0 {
