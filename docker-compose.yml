@@ -88,7 +88,7 @@ services:
     environment:
       KAFKA_BROKERS: kafka:9092
       KAFKA_SCHEDULE_TOPIC: woms.schedule.jobs
-      KAFKA_CONSUMER_GROUP: woms-scheduler-workers
+      KAFKA_CONSUMER_GROUP: ${KAFKA_CONSUMER_GROUP:-woms-scheduler-workers}
       DATABASE_URL: postgres://woms:woms@postgres:5432/woms?sslmode=disable
       WORKER_MIN_JOB_DURATION_MS: "500"
       WORKER_MAX_RETRIES: "3"
