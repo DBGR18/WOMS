@@ -32,7 +32,7 @@ spec:
     {{- if .Values.keda.kafka.enabled }}
     - type: kafka
       metadata:
-        bootstrapServers: {{ .Values.keda.kafka.bootstrapServers | quote }}
+        bootstrapServers: {{ tpl .Values.keda.kafka.bootstrapServers . | quote }}
         topic: {{ .Values.keda.kafka.topic | quote }}
         consumerGroup: {{ .Values.keda.kafka.consumerGroup | quote }}
         lagThreshold: {{ .Values.keda.kafka.lagThreshold | quote }}

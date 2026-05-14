@@ -9,7 +9,7 @@ api:
     minAvailable: 1
   image:
     repository: woms-api
-    tag: v0.1.22
+    tag: v0.1.30
   jwtSecret: ""
   env:
     store: postgres
@@ -31,7 +31,7 @@ worker:
   replicaCount: 1
   image:
     repository: woms-scheduler-worker
-    tag: v0.1.22
+    tag: v0.1.30
   env:
     databaseUrl: postgres://woms:woms@postgres:5432/woms?sslmode=disable
     minJobDurationMs: "0"
@@ -50,7 +50,7 @@ web:
     minAvailable: 1
   image:
     repository: woms-web
-    tag: v0.1.22
+    tag: v0.1.30
   resources:
     requests:
       cpu: 50m
@@ -86,7 +86,7 @@ keda:
       periodSeconds: 60
   kafka:
     enabled: true
-    bootstrapServers: kafka:9092
+    bootstrapServers: "kafka.{{ .Release.Namespace }}.svc.cluster.local:9092"
     topic: woms.schedule.jobs
     consumerGroup: woms-scheduler-workers
     lagThreshold: "10"
@@ -98,6 +98,10 @@ keda:
 postgresql:
   enabled: true
   fullnameOverride: postgres
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/postgresql
+    tag: v0.1.30
   auth:
     username: woms
     password: woms
@@ -114,6 +118,10 @@ postgresql:
 redis:
   enabled: true
   fullnameOverride: redis
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/redis
+    tag: v0.1.30
   architecture: standalone
   auth:
     enabled: false
@@ -129,8 +137,18 @@ redis:
 kafka:
   enabled: true
   fullnameOverride: kafka
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/kafka
+    tag: v0.1.30
   controller:
     replicaCount: 1
+    extraConfigYaml:
+      default.replication.factor: 1
+      min.insync.replicas: 1
+      offsets.topic.replication.factor: 1
+      transaction.state.log.min.isr: 1
+      transaction.state.log.replication.factor: 1
     resources:
       requests:
         cpu: 100m
@@ -151,8 +169,8 @@ kafka:
 kafkaTopic:
   enabled: true
   image:
-    repository: docker.io/bitnami/kafka
-    tag: v0.1.22
+    repository: docker.io/bitnamilegacy/kafka
+    tag: v0.1.30
     pullPolicy: IfNotPresent
   activeDeadlineSeconds: 420
   wait:

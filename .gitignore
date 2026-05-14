@@ -11,6 +11,7 @@ bin/
 coverage.out
 *.test
 .gocache/
+.gomodcache/
 
 # Docker and local volumes
 .docker/

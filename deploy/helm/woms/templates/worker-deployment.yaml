@@ -23,7 +23,7 @@ spec:
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           env:
             - name: KAFKA_BROKERS
-              value: {{ .Values.keda.kafka.bootstrapServers | quote }}
+              value: {{ tpl .Values.keda.kafka.bootstrapServers . | quote }}
             - name: KAFKA_SCHEDULE_TOPIC
               value: {{ .Values.keda.kafka.topic | quote }}
             - name: KAFKA_CONSUMER_GROUP

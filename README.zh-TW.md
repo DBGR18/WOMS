@@ -93,6 +93,7 @@ cp .env.example .env
 - `WORKER_MAX_RETRIES`：worker 遇到暫時性 DB/Kafka 錯誤時的最大重試次數。
 - `DOCKERHUB_NAMESPACE`：Docker Hub namespace。
 - `WOMS_IMAGE_TAG`：Docker Compose 使用的 image tag，預設 `latest`。
+- `API_UPSTREAM`：web NGINX 代理 API 的 upstream；Docker Compose 會設定為 `api:8080`。
 
 GitHub Actions Docker Hub 設定：
 
@@ -131,6 +132,8 @@ JWT_SECRET=local-dev-secret go run ./cmd/api
 docker compose up --build
 ```
 
+Docker Compose 會透過 health gate 啟動基礎服務：PostgreSQL 必須通過 `pg_isready`，Redis 必須回應 `PING`，Kafka 必須能回應 broker query，API 必須回傳 `/readyz`，Web container 會等 API healthy 後才啟動。
+
 預設服務：
 
 - API：`http://localhost:8080`
@@ -159,7 +162,7 @@ docker compose up --build
 持久化備註：
 
 - Docker Compose PostgreSQL 使用 `postgres-data` named volume，因此本機資料會在 container restart 後保留。
-- 目前 foundation API 仍使用 in-memory store。PostgreSQL migrations 與 seed files 已存在，但 API persistence wiring 會在後續 feature slice 實作。
+- Docker Compose 預設讓 API 使用 PostgreSQL。啟動時 migration 可重複執行，並會升級既有本機 volume，包含舊版角色 constraint，以及在 allocation status tracking 加入前建立、缺少 `schedule_allocations.status` 欄位的舊表。
 - Helm chart 目前會使用 `DATABASE_URL`，但尚未部署 PostgreSQL StatefulSet/PVC。
 
 ## Docker Build
@@ -181,6 +184,31 @@ docker build -f Dockerfile.web -t woms-web:local .
 
 使用者不應手動 patch web deployment、手動建立 Kafka topic，或手動調整 topic partitions。這些都必須由 image、Helm chart 或平台 bootstrap 自動處理。
 
+單一 VM 使用 MicroK8s 的平台準備範例：
+
+```bash
+sudo snap install microk8s --classic --channel=1.35/stable
+sudo usermod -aG microk8s "$USER"
+newgrp microk8s
+microk8s status --wait-ready
+microk8s enable dns hostpath-storage metrics-server
+microk8s enable community
+microk8s enable keda
+microk8s kubectl get node
+microk8s kubectl get pods -A
+```
+
+平台 pods 健康前不要繼續部署 WOMS。`microk8s kubectl get pods -A` 應顯示 `kube-system` 與 `keda` pods 都是 `Running`，namespace events 不應出現 `MissingClusterDNS`。如果看到 `MissingClusterDNS`，請在能完成 sudo-backed kubelet 更新的 shell 重新執行 `microk8s enable dns`，再確認 kubelet 的 cluster DNS 值與 `kube-dns` Service `CLUSTER-IP` 一致，且有 `--cluster-domain=cluster.local`：
+
+```bash
+microk8s kubectl -n kube-system get svc kube-dns
+grep -E 'cluster-dns|cluster-domain' /var/snap/microk8s/current/args/kubelet
+```
+
+本次驗證的 MicroK8s VM 使用 `--cluster-dns=10.152.183.10`，但其他叢集可能會使用不同的 CoreDNS Service IP。
+
+若使用 MicroK8s 而不是獨立安裝的 `kubectl` 與 `helm`，可以先在目前 shell 設定 alias，或把下方指令改成 `microk8s kubectl` 與 `microk8s helm3`。
+
 Render Helm：
 
 ```bash
@@ -194,13 +222,35 @@ helm upgrade --install woms ./deploy/helm/woms --dependency-update \
   --namespace woms --create-namespace
 ```
 
+部署後先驗證資源，再視為安裝完成：
+
+```bash
+kubectl get pod,deploy,statefulset,job,pvc,scaledobject,hpa,pdb -n woms
+NAMESPACE=woms ./scripts/verify-k8s.sh
+```
+
 當 `api.jwtSecret` 未設定時，chart 會自動產生或重用 JWT signing secret。可用下列指令取得：
 
 ```bash
 kubectl get secret woms-woms-api -n woms -o jsonpath='{.data.JWT_SECRET}' | base64 -d
 ```
 
-內建 PostgreSQL、Redis 與 Kafka 預設值只供本機或 VM demo 使用。正式環境應使用自訂 values file，明確設定外部服務 endpoint、credentials、`api.jwtSecret`；若使用 fork 後自行建置的 images，也應設定 `imageRegistry`。
+目前 Helm chart 會一併安裝內建 PostgreSQL、Redis 與 Kafka dependencies，供本機、單節點 MicroK8s 或 VM demo 使用，並建立對應的 StatefulSet / PVC。這些預設僅適合示範與開發環境，不建議直接用於正式環境。
+
+正式環境應使用自訂 values file，明確設定外部服務 endpoint、credentials、`api.jwtSecret`；若使用 fork 後自行建置的 images，也應設定 `imageRegistry`。
+
+Chart 會固定 dependency chart 版本使用的 Bitnami image tags。Docker Hub 已不再從 `bitnami/*` 提供這些保留 tags，因此預設 values 會把 PostgreSQL、Redis、Kafka 與 Kafka topic hook 覆寫到 `bitnamilegacy/*`。
+
+單節點 MicroK8s demo 中，chart 也會把 Kafka internal topic replication 設為 `1`，包含 `offsets.topic.replication.factor`。若未設定，`__consumer_offsets` 會沿用 replication factor `3`，scheduler worker 無法建立 `woms-scheduler-workers` consumer group，KEDA 也無法讀取 Kafka lag metric。
+
+如果環境中已有舊 release，Bitnami dependencies 在 `helm upgrade` 時可能要求帶入既有自動產生的 passwords。乾淨 VM demo 應先明確刪除舊 release 與 PVC 後再重新安裝；真正升級時則依 Helm 錯誤訊息提示，把既有 secrets 帶入。
+
+如果 Kafka topic hook 沒有完成，可用下列指令檢查：
+
+```bash
+kubectl get job,pod -n woms -l app.kubernetes.io/component=kafka-topic
+kubectl logs job/woms-woms-kafka-topic -n woms
+```
 
 本機或 VM demo 可用 port-forward 開啟前端：
 

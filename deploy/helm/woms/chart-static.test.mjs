@@ -13,6 +13,12 @@ const kafkaTopicJob = readFileSync(new URL("./templates/kafka-topic-job.yaml", i
 const secret = readFileSync(new URL("./templates/secret.yaml", import.meta.url), "utf8");
 const notes = readFileSync(new URL("./templates/NOTES.txt", import.meta.url), "utf8");
 
+function imageTag(section) {
+  const match = values.match(new RegExp(`${section}:\\n[\\s\\S]*?image:\\n[\\s\\S]*?tag:\\s+([^\\s]+)`));
+  assert.ok(match, `missing ${section}.image.tag`);
+  return match[1];
+}
+
 test("Helm values keep async scheduling and HPA demo defaults wired", () => {
   assert.match(values, /store:\s+postgres/);
   assert.match(values, /databaseUrl:\s+postgres:\/\/woms:woms@postgres:5432\/woms\?sslmode=disable/);
@@ -23,6 +29,7 @@ test("Helm values keep async scheduling and HPA demo defaults wired", () => {
   assert.match(values, /minJobDurationMs:\s+"0"/);
   assert.match(values, /maxRetries:\s+"3"/);
   assert.match(values, /consumerGroup:\s+woms-scheduler-workers/);
+  assert.match(values, /bootstrapServers:\s+"kafka\.\{\{ \.Release\.Namespace \}\}\.svc\.cluster\.local:9092"/);
   assert.match(values, /lagThreshold:\s+"10"/);
   assert.match(values, /targetUtilization:\s+"70"/);
 });
@@ -44,9 +51,10 @@ test("Helm chart deploys required platform dependencies by default", () => {
 
 test("Default Docker image tags use v-prefixed release tags", () => {
   assert.match(values, /^imageRegistry:\s+docker\.io\/d11nn/m);
-  assert.match(values, /woms-api[\s\S]*tag:\s+v0\.1\.22/);
-  assert.match(values, /woms-scheduler-worker[\s\S]*tag:\s+v0\.1\.22/);
-  assert.match(values, /woms-web[\s\S]*tag:\s+v0\.1\.22/);
+  const apiTag = imageTag("api");
+  assert.match(apiTag, /^v0\.1\.\d+$/);
+  assert.equal(imageTag("worker"), apiTag);
+  assert.equal(imageTag("web"), apiTag);
   assert.match(apiDeployment, /include "woms\.image"/);
   assert.match(workerDeployment, /include "woms\.image"/);
   assert.match(webDeployment, /include "woms\.image"/);
@@ -58,6 +66,7 @@ test("KEDA ScaledObject template points at scheduler worker backlog", () => {
   assert.match(scaledObject, /name:\s+\{\{ include "woms\.fullname" \. \}\}-worker-hpa/);
   assert.match(scaledObject, /scaleTargetRef:[\s\S]*name:\s+\{\{ include "woms\.fullname" \. \}\}-worker/);
   assert.match(scaledObject, /type:\s+kafka/);
+  assert.match(scaledObject, /bootstrapServers:\s+\{\{ tpl \.Values\.keda\.kafka\.bootstrapServers \. \| quote \}\}/);
   assert.match(scaledObject, /topic:\s+\{\{ \.Values\.keda\.kafka\.topic \| quote \}\}/);
   assert.match(scaledObject, /consumerGroup:\s+\{\{ \.Values\.keda\.kafka\.consumerGroup \| quote \}\}/);
   assert.match(scaledObject, /lagThreshold:\s+\{\{ \.Values\.keda\.kafka\.lagThreshold \| quote \}\}/);
@@ -66,9 +75,12 @@ test("KEDA ScaledObject template points at scheduler worker backlog", () => {
 });
 
 test("Kafka topic hook creates the scheduling topic with enough partitions for HPA", () => {
+  assert.match(values, /kafkaTopic:[\s\S]*repository:\s+docker\.io\/bitnamilegacy\/kafka/);
+  assert.match(values, /kafkaTopic:[\s\S]*tag:\s+3\.7\.1-debian-12-r4/);
   assert.match(kafkaTopicJob, /kind:\s+Job/);
   assert.match(kafkaTopicJob, /helm\.sh\/hook/);
   assert.match(kafkaTopicJob, /activeDeadlineSeconds:\s+\{\{ \.Values\.kafkaTopic\.activeDeadlineSeconds \}\}/);
+  assert.match(kafkaTopicJob, /bootstrap=\{\{ tpl \.Values\.keda\.kafka\.bootstrapServers \. \| quote \}\}/);
   assert.match(kafkaTopicJob, /kafka-topics\.sh/);
   assert.match(kafkaTopicJob, /max_attempts=\{\{ \.Values\.kafkaTopic\.wait\.maxAttempts \| int \}\}/);
   assert.match(kafkaTopicJob, /exit 1/);
@@ -76,6 +88,25 @@ test("Kafka topic hook creates the scheduling topic with enough partitions for H
   assert.match(kafkaTopicJob, /--if-not-exists/);
   assert.match(kafkaTopicJob, /--alter/);
   assert.match(kafkaTopicJob, /\$partitions = \(\.Values\.keda\.maxReplicaCount \| int\)/);
+});
+
+test("Bitnami dependency image overrides use the legacy repository for retained tags", () => {
+  assert.match(values, /postgresql:[\s\S]*repository:\s+bitnamilegacy\/postgresql/);
+  assert.match(values, /postgresql:[\s\S]*tag:\s+16\.4\.0-debian-12-r14/);
+  assert.match(values, /redis:[\s\S]*repository:\s+bitnamilegacy\/redis/);
+  assert.match(values, /redis:[\s\S]*tag:\s+7\.2\.5-debian-12-r4/);
+  assert.match(values, /^kafka:\n(?:^[ \t]+[^\n]*\n)*?^[ \t]+image:\n(?:^[ \t]+[^\n]*\n)*?^[ \t]+repository:\s+bitnamilegacy\/kafka\s*$/m);
+  assert.match(values, /^kafka:\n(?:^[ \t]+[^\n]*\n)*?^[ \t]+image:\n(?:^[ \t]+[^\n]*\n)*?^[ \t]+tag:\s+3\.7\.1-debian-12-r4\s*$/m);
+});
+
+test("Single-node Kafka defaults keep internal topics usable on a clean VM", () => {
+  assert.match(values, /controller:[\s\S]*replicaCount:\s+1/);
+  assert.match(values, /broker:[\s\S]*replicaCount:\s+0/);
+  assert.match(values, /controller:[\s\S]*extraConfigYaml:[\s\S]*default\.replication\.factor:\s+1/);
+  assert.match(values, /controller:[\s\S]*extraConfigYaml:[\s\S]*min\.insync\.replicas:\s+1/);
+  assert.match(values, /controller:[\s\S]*extraConfigYaml:[\s\S]*offsets\.topic\.replication\.factor:\s+1/);
+  assert.match(values, /controller:[\s\S]*extraConfigYaml:[\s\S]*transaction\.state\.log\.min\.isr:\s+1/);
+  assert.match(values, /controller:[\s\S]*extraConfigYaml:[\s\S]*transaction\.state\.log\.replication\.factor:\s+1/);
 });
 
 test("API JWT secret is generated when unset and documented for retrieval", () => {
@@ -92,6 +123,7 @@ test("API and worker deployments expose PostgreSQL, Kafka, and retry env", () =>
   assert.match(apiDeployment, /name:\s+KAFKA_SCHEDULE_TOPIC/);
   assert.match(apiDeployment, /name:\s+KAFKA_PUBLISH_ENABLED/);
   assert.match(workerDeployment, /name:\s+KAFKA_SCHEDULE_TOPIC/);
+  assert.match(workerDeployment, /value:\s+\{\{ tpl \.Values\.keda\.kafka\.bootstrapServers \. \| quote \}\}/);
   assert.match(workerDeployment, /name:\s+KAFKA_CONSUMER_GROUP/);
   assert.match(workerDeployment, /name:\s+DATABASE_URL/);
   assert.match(workerDeployment, /name:\s+WORKER_MIN_JOB_DURATION_MS/);

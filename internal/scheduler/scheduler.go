@@ -126,11 +126,15 @@ func Plan(req Request) (Result, error) {
 					// even when that plan finishes after the customer due date.
 				} else {
 					finish := estimateFinishDate(req, order, day, remaining, highUsed, lowUsed, newUsed)
+					affectedEnd := finish
+					if affectedEnd.Before(due) {
+						affectedEnd = due
+					}
 					result.Conflicts = append(result.Conflicts, Conflict{
 						OrderID:            order.ID,
 						Reason:             "capacity cannot satisfy order before due date",
 						EarliestFinishDate: finish,
-						AffectedOrderIDs:   affectedOrdersBetween(start, due, lowByDate),
+						AffectedOrderIDs:   affectedOrdersBetween(start, affectedEnd, lowByDate),
 					})
 					break
 				}

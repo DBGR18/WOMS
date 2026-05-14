@@ -14,7 +14,7 @@ import (
 	"github.com/d11nn/woms/internal/auth"
 	"github.com/d11nn/woms/internal/domain"
 	"github.com/d11nn/woms/internal/scheduler"
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 )
 
 type PostgresStore struct {
@@ -315,6 +315,81 @@ func (s *PostgresStore) ResubmitOrder(req resubmitOrderRequest, claims auth.Clai
 	return order, nil
 }
 
+func (s *PostgresStore) CreateDemoConflictOrders(req demoConflictRequest, claims auth.Claims) ([]domain.Order, error) {
+	lineID := req.LineID
+	if lineID == "" && claims.Role == domain.RoleScheduler {
+		lineID = claims.LineID
+	}
+	if claims.Role == domain.RoleScheduler && lineID != claims.LineID {
+		return nil, errors.New("cannot create demo orders for another production line")
+	}
+	line, err := s.productionLine(lineID)
+	if err != nil {
+		return nil, err
+	}
+	if req.Count == 0 {
+		req.Count = 6
+	}
+	if req.Count < 5 || req.Count > 20 {
+		return nil, errors.New("count must be between 5 and 20")
+	}
+	currentDate, err := currentDateInLineTimezone(line, nowUTC())
+	if err != nil {
+		return nil, err
+	}
+	if req.DueDate == "" {
+		req.DueDate = currentDate.AddDate(0, 0, 1).Format(dateLayout)
+	}
+	dueDate, err := validateFutureDueDate(req.DueDate, currentDate)
+	if err != nil {
+		return nil, err
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	now := time.Now().UTC()
+	orders := make([]domain.Order, 0, req.Count)
+	for index := 1; index <= req.Count; index++ {
+		createdAt := now.Add(time.Duration(index) * time.Nanosecond)
+		order := domain.Order{
+			ID:        "ORD-" + strconv.FormatInt(createdAt.UnixNano(), 10),
+			Customer:  "Conflict Demo " + strconv.Itoa(index),
+			LineID:    lineID,
+			Quantity:  2500,
+			Priority:  domain.PriorityLow,
+			Status:    domain.StatusPending,
+			DueDate:   dueDate,
+			CreatedBy: claims.Subject,
+			CreatedAt: createdAt,
+			UpdatedAt: createdAt,
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO orders (id, customer, line_id, quantity, priority, status, due_date, note, created_by, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, '', $8, $9, $9)
+		`, order.ID, order.Customer, order.LineID, order.Quantity, order.Priority, order.Status, order.DueDate, order.CreatedBy, order.CreatedAt); err != nil {
+			return nil, err
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO audit_logs (id, actor_id, action, resource, reason, created_at)
+			VALUES ($1, $2, 'order.create_demo_conflict', $3, $4, $5)
+		`, "AUD-"+order.ID, claims.Subject, order.ID, req.DueDate, order.CreatedAt); err != nil {
+			return nil, err
+		}
+		orders = append(orders, order)
+	}
+	if _, err := tx.Exec("UPDATE production_lines SET schedule_revision = schedule_revision + 1 WHERE id = $1", lineID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return orders, nil
+}
+
 func (s *PostgresStore) DeleteOrders(req deleteOrdersRequest, claims auth.Claims) (deleteOrdersResponse, error) {
 	if len(req.OrderIDs) == 0 {
 		return deleteOrdersResponse{}, errors.New("orderIds is required")
@@ -494,6 +569,11 @@ func (s *PostgresStore) ensurePreviewLoaded(previewID string) error {
 }
 
 func (s *PostgresStore) PreviewSchedule(req scheduleRequest, claims auth.Claims) (schedulePreviewResponse, error) {
+	var err error
+	req, err = s.defaultScheduleCurrentDateLocked(req, claims, nowUTC())
+	if err != nil {
+		return schedulePreviewResponse{}, err
+	}
 	result, preview, err := s.previewFromDB(req, claims)
 	if err != nil {
 		return schedulePreviewResponse{}, err
@@ -519,6 +599,7 @@ func (s *PostgresStore) PreviewSchedule(req scheduleRequest, claims auth.Claims)
 	}
 	return schedulePreviewResponse{
 		PreviewID:   preview.ID,
+		CurrentDate: req.CurrentDate,
 		Allocations: result.Allocations,
 		Conflicts:   result.Conflicts,
 		FinishDate:  result.FinishDate,
@@ -1130,6 +1211,9 @@ func (s *PostgresStore) schedulerInputs(req scheduleRequest, claims auth.Claims,
 		if claims.Role != domain.RoleSales {
 			return nil, errors.New("only sales can preview draft orders")
 		}
+		if len(req.ResolutionOrderIDs) > 0 {
+			return nil, errors.New("draft previews cannot include resolution orders")
+		}
 		draft := *req.DraftOrder
 		if draft.LineID == "" {
 			draft.LineID = lineID
@@ -1177,7 +1261,121 @@ func (s *PostgresStore) schedulerInputs(req scheduleRequest, claims auth.Claims,
 		}
 		inputs = append(inputs, input)
 	}
-	return inputs, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	resolutionInputs, err := s.resolutionOrderInputs(req.ResolutionOrderIDs, lineID)
+	if err != nil {
+		return nil, err
+	}
+	inputs = append(inputs, resolutionInputs...)
+	return inputs, nil
+}
+
+func (s *PostgresStore) resolutionOrderInputs(resolutionOrderIDs []string, lineID string) ([]scheduler.OrderInput, error) {
+	ids := uniqueOrderIDs(resolutionOrderIDs)
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := s.db.Query(`
+		SELECT id, line_id, quantity, priority, status, due_date
+		FROM orders
+		WHERE id = ANY($1)
+	`, pq.Array(ids))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	inputs := []scheduler.OrderInput{}
+	found := map[string]bool{}
+	for rows.Next() {
+		var id string
+		var orderLineID string
+		var quantity int
+		var priority domain.Priority
+		var status string
+		var dueDate time.Time
+		if err := rows.Scan(&id, &orderLineID, &quantity, &priority, &status, &dueDate); err != nil {
+			return nil, err
+		}
+		if orderLineID != lineID {
+			return nil, errors.New("resolution order line must match preview line")
+		}
+		if status != string(domain.StatusScheduled) {
+			return nil, errors.New("resolution orders must be low-priority scheduled orders without locked or completed allocations")
+		}
+		if priority != domain.PriorityLow {
+			return nil, errors.New("resolution orders must be low-priority scheduled orders without locked or completed allocations")
+		}
+		if err := s.ensureResolutionOrderMovable(id); err != nil {
+			return nil, err
+		}
+		inputs = append(inputs, scheduler.OrderInput{
+			ID:       id,
+			LineID:   orderLineID,
+			Quantity: quantity,
+			Priority: priority,
+			DueDate:  dueDate,
+		})
+		found[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, id := range ids {
+		if !found[id] {
+			return nil, errors.New("resolution order not found")
+		}
+	}
+	return inputs, nil
+}
+
+func (s *PostgresStore) ensureResolutionOrderMovable(orderID string) error {
+	rows, err := s.db.Query(`
+		SELECT locked, COALESCE(status, $1)
+		FROM schedule_allocations
+		WHERE order_id = $2
+	`, string(domain.StatusScheduled), orderID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	hasAllocation := false
+	for rows.Next() {
+		var locked bool
+		var status string
+		if err := rows.Scan(&locked, &status); err != nil {
+			return err
+		}
+		hasAllocation = true
+		if locked || status == string(domain.StatusInProgress) || status == string(domain.StatusCompleted) {
+			return errors.New("resolution orders must be low-priority scheduled orders without locked or completed allocations")
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !hasAllocation {
+		return errors.New("resolution orders must be low-priority scheduled orders without locked or completed allocations")
+	}
+	return nil
+}
+
+func uniqueOrderIDs(values []string) []string {
+	seen := map[string]bool{}
+	result := []string{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
 }
 
 func (s *PostgresStore) existingAllocations(lineID string, resolutionOrderIDs []string) ([]scheduler.ExistingAllocation, error) {

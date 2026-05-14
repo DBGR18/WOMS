@@ -11,6 +11,7 @@ import {
   groupAllocationsByDate,
   isFutureDateKey,
   lineScopedOrders,
+  mergePreviewCalendarAllocations,
   matchesOrder,
   monthGrid,
   priorityLabel,
@@ -47,6 +48,32 @@ test("front-end visible HPA status labels are zh-TW", () => {
   assert.equal(html.includes(">Orders<"), false);
   assert.equal(html.includes(">Status<"), false);
   assert.equal(html.includes(">Sales Follow-up<"), false);
+});
+
+test("web nginx proxy preserves API request paths", () => {
+  const nginx = readFileSync(new URL("./nginx.conf.template", import.meta.url), "utf8");
+  assert.match(nginx, /location \/api\/ \{/);
+  assert.match(nginx, /set \$api_upstream http:\/\/\$\{API_UPSTREAM\};/);
+  assert.match(nginx, /proxy_pass \$api_upstream;/);
+  assert.doesNotMatch(nginx, /proxy_pass \$api_upstream\/api\//);
+});
+
+test("order cards support pointer fallback drag scheduling", () => {
+  const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");
+  const styles = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
+  assert.match(app, /attachPointerScheduleDrag\(card, order\.id\)/);
+  assert.match(app, /attachMouseScheduleDrag\(card, order\.id\)/);
+  assert.equal(app.includes('document.elementFromPoint(clientX, clientY)?.closest?.(".calendar-day")'), true);
+  assert.match(app, /await scheduleDroppedOrders\(drag\.orderIds, targetDate\)/);
+  assert.match(app, /const orderIds = selectedPendingOrderIds\(\)/);
+  assert.match(app, /document\.addEventListener\("mousemove", onMouseScheduleDragMove\)/);
+  assert.match(styles, /\.order-card\.selectable\s*\{[\s\S]*touch-action:\s+none;/);
+});
+
+test("schedule preview uses API currentDate as the confirmation payload source", () => {
+  const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");
+  assert.doesNotMatch(app, /currentDate:\s*requestData\.currentDate\s*\?\?\s*todayDateInputValue\(\)/);
+  assert.match(app, /currentDate:\s*result\.currentDate\s*\?\?\s*payloadData\.currentDate\s*\?\?\s*todayDateInputValue\(\)/);
 });
 
 const order = {
@@ -183,6 +210,22 @@ test("groupAllocationsByDate groups calendar allocations by ISO date", () => {
   ]);
   assert.deepEqual(groups["2026-05-02"].map((item) => item.orderId), ["ORD-1", "ORD-2"]);
   assert.deepEqual(groups["2026-05-03"].map((item) => item.orderId), ["ORD-3"]);
+});
+
+test("mergePreviewCalendarAllocations replaces touched orders with preview entries", () => {
+  const calendar = [
+    { orderId: "ORD-1", date: "2026-05-15", quantity: 2500, status: "已排程" },
+    { orderId: "ORD-2", date: "2026-05-15", quantity: 2500, status: "已排程" },
+  ];
+  const preview = [
+    { orderId: "ORD-1", date: "2026-05-16", quantity: 2500 },
+    { orderId: "ORD-3", date: "2026-05-15", quantity: 2500 },
+  ];
+  const merged = mergePreviewCalendarAllocations(preview, calendar, ["ORD-2"]);
+
+  assert.equal(merged.some((item) => item.orderId === "ORD-1" && item.date === "2026-05-15"), false);
+  assert.equal(merged.some((item) => item.orderId === "ORD-2"), false);
+  assert.equal(merged.filter((item) => item.preview).length, 2);
 });
 
 test("sales due date helpers allow only tomorrow or later", () => {
