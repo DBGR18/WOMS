@@ -40,18 +40,21 @@ microk8s kubectl get node
 microk8s kubectl get pods -A
 ```
 
-平台 pods 必須健康後才能部署 WOMS。若 namespace events 出現 `MissingClusterDNS`，不要繼續部署；先確認 kubelet args：
+平台 pods 必須健康後才能部署 WOMS。若 namespace events 出現 `MissingClusterDNS`，不要繼續部署；先確認 cluster DNS Service IP 與 kubelet args：
 
 ```bash
+microk8s kubectl -n kube-system get svc kube-dns
 grep -E 'cluster-dns|cluster-domain' /var/snap/microk8s/current/args/kubelet
 ```
 
-必須包含：
+kubelet 的 `--cluster-dns` 值必須與 `kube-dns` Service `CLUSTER-IP` 一致；以這份 chart 預設的 service 名稱而言，domain 應為 `cluster.local`。本次驗證的 MicroK8s VM 使用：
 
 ```text
 --cluster-dns=10.152.183.10
 --cluster-domain=cluster.local
 ```
+
+不要把 `10.152.183.10` 直接照抄到其他叢集；應使用該叢集自己的 CoreDNS Service IP。
 
 ### 2. 確認沒有殘留 app namespace
 
@@ -125,7 +128,7 @@ pod 內 DNS 曾落到外部 resolver：
 lookup postgres on 8.8.8.8:53: no such host
 ```
 
-修正後 kubelet args：
+這台 MicroK8s VM 修正後的 kubelet args：
 
 ```text
 --cluster-dns=10.152.183.10

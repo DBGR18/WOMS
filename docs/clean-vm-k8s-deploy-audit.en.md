@@ -40,18 +40,21 @@ microk8s kubectl get node
 microk8s kubectl get pods -A
 ```
 
-Do not deploy WOMS until platform pods are healthy. If namespace events show `MissingClusterDNS`, confirm kubelet args first:
+Do not deploy WOMS until platform pods are healthy. If namespace events show `MissingClusterDNS`, confirm the cluster DNS Service IP and kubelet args first:
 
 ```bash
+microk8s kubectl -n kube-system get svc kube-dns
 grep -E 'cluster-dns|cluster-domain' /var/snap/microk8s/current/args/kubelet
 ```
 
-They must include:
+The kubelet `--cluster-dns` value must match the `kube-dns` Service `CLUSTER-IP`, and the domain should be `cluster.local` for this chart's default service names. In this verified MicroK8s VM, the values were:
 
 ```text
 --cluster-dns=10.152.183.10
 --cluster-domain=cluster.local
 ```
+
+Do not copy `10.152.183.10` blindly to other clusters; use that cluster's CoreDNS Service IP.
 
 ### 2. Confirm There Are No Stale App Namespaces
 
@@ -125,7 +128,7 @@ Pod DNS fell back to the external resolver:
 lookup postgres on 8.8.8.8:53: no such host
 ```
 
-Fixed kubelet args:
+Fixed kubelet args for this MicroK8s VM:
 
 ```text
 --cluster-dns=10.152.183.10
