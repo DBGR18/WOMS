@@ -31,6 +31,16 @@ Git 回覆 `Already up to date.`
 - scale-up：每 30 秒可增加 100 percent，沒有 stabilization window。
 - scale-down：每 60 秒可減少 50 percent，stabilization window 為 120 秒。
 
+## 信心狀態
+
+這份 plan 目前不是 100 percent deployment guarantee。它是重新檢查目前 WOMS chart 與 Gthulhu `develop` source 後，最安全的 code-based 策略。真正的 100 percent 需要在 live cluster 證明 Gthulhu 會輸出 pod-labeled Prometheus metrics、Prometheus 能 scrape、KEDA 能讀 query，而且 WOMS 既有 worker HPA 行為沒有被破壞。
+
+相較前一版 proposal，這裡最重要的修正是：
+
+- Gthulhu manager/API code 確實可以列出 pod labels，也可以在 manager-side pod inventory path 套用 Kubernetes label selectors。
+- 但 `PodSchedulingMetrics` 使用的 Gthulhu monitor/eBPF path 是另一條路徑。在 commit `00fc41f` 上，WOMS 依賴它進 HPA 前，仍需要 live verification。
+- 如果 Gthulhu 已經提供完整且部署驗證過、符合這個 use case 的 scaler path，WOMS 不應在 application code 重複實作。WOMS 仍可能需要一個很小的 Helm 修改，讓 Kafka、CPU、Gthulhu metrics 保持在同一個既有 `ScaledObject` 內。
+
 ## 目標
 
 在不取代既有 Kafka lag 與 CPU triggers 的前提下，把 Gthulhu-backed scheduling-pressure signal 加到 WOMS scheduler-worker autoscaling path。
@@ -76,20 +86,35 @@ WOMS 目前沒有把 Gthulhu、Prometheus 或 Grafana vendor 到 `deploy/helm/wo
 - Gthulhu Helm 負責 Gthulhu CRDs、monitor、eBPF collector、ServiceMonitor 與 Gthulhu runtime components。
 - Platform 負責 Prometheus/Grafana，通常使用 `kube-prometheus-stack` 或既有 monitoring stack。
 
-KEDA 不應該同時收到兩個獨立 `ScaledObject` 去控制同一個 WOMS worker deployment。Gthulhu chart 有 example KEDA scaling hints，`PodSchedulingMetrics.spec.scaling` 也存在，但這個 PoC 不應針對 `woms-woms-worker` 啟用它們。正確整合點是既有 WOMS `ScaledObject`：在目前 Kafka 與 CPU triggers 旁邊新增一個 optional `prometheus` trigger。
+KEDA 不應該同時收到兩個獨立 scaling controllers 去控制同一個 WOMS worker deployment。KEDA 官方 `ScaledObject` model 是把同一個 target workload 的 triggers 放在同一個 `ScaledObject` 內；該 `ScaledObject` 會擁有 target workload 的 generated HPA。WOMS 目前已經有 worker `ScaledObject`，其中結合 Kafka 與 CPU triggers。
+
+Gthulhu 有 chart-level example `ScaledObject`，`PodSchedulingMetrics.spec.scaling` 也存在於 CRD/API model。但目前 code review 沒有找到一條 production-ready controller path，能把 live `PodSchedulingMetrics.spec.scaling` 自動轉成完全符合 WOMS worker 的 scaler，並保留 Kafka trigger、CPU trigger、HPA behavior 與命名。因此預設 PoC 策略是：
+
+- 由 WOMS 繼續擁有 `ScaledObject/woms-woms-worker`；
+- 把 Gthulhu 作為一個 optional prometheus trigger 加進同一個 object；
+- 除非 live deployment 證明 Gthulhu scaler 能安全擁有完整 combined scaler，否則不要對 `woms-woms-worker` 啟用 Gthulhu example scaler 或 PSM scaling hints。
 
 ## Gthulhu develop 分支的重要限制
 
 在 Gthulhu `develop` commit `00fc41f` 上，`PodSchedulingMetrics` 需要 `spec.labelSelectors`，CRD 也提供 `k8sNamespaces`、`commandRegex`、metric flags 與 optional scaling hints。
 
-但 `monitor/crdwatcher/watcher.go` 目前有一個落地限制：
+### Label Selector 路徑分裂
 
-- `psmMatchesPod` 會檢查 `k8sNamespaces`。
-- `PodRef` 尚未攜帶 pod labels。
-- label selector matching 尚未精準實作。
-- namespace 檢查後目前直接回傳 `true`，所以 `labelSelectors` 與 `commandRegex` 不能被視為 worker-only 選取保證。
+Gthulhu manager/API 與 Gthulhu monitor/eBPF 目前不能視為有相同的 selector guarantee。
+
+- Manager-side Kubernetes adapter 會 copy `pod.Labels`，也會用 `selector.Matches(labels.Set(pod.Labels))`，所以 manager UI/API 知道 labels。
+- Monitor path 使用 `monitor/collector.PodRef`，目前只有 `PodName`、`PodUID`、`Namespace`、`NodeName`，沒有 labels。
+- `monitor/crdwatcher/watcher.go` 會檢查 `k8sNamespaces`，接著註解說明 `PodRef` 不攜帶 labels，然後直接 `return true`。因此在 monitor path 裡，`labelSelectors` 與 `commandRegex` 目前不能被視為 worker-only 硬篩選。
 
 因此短期 WOMS PoC 可以用 namespace `woms` 限縮 Gthulhu collection，但 KEDA 與 Grafana 的 Prometheus query 必須再用 `pod_name=~"woms-woms-worker-.*"` 過濾 worker metrics。正式重用前，Gthulhu 應先擴充 `PodRef` 與 informer path，加入 labels，並真正執行 `labelSelectors` 與必要的 command matching。
+
+### Pod Index 與 Scrape Path 必須先驗證
+
+Monitor collector 會透過 `PodMapper.GetPodForPID` 把 eBPF per-PID metrics 聚合成 pod metrics。這個函式需要透過 `SetPodIndex` 建立 pod UID index。在目前檢查到的 `develop` source 裡，`SetPodIndex` 有出現在 tests，但 monitor startup path 沒有清楚看到 Kubernetes informer 在 production 中填入它。
+
+Chart 也需要 live scrape check。目前 chart 有 manager/sidecar 的 ServiceMonitor，也有 monitor-specific ServiceMonitor，但 monitor `/metrics` endpoint 與 service port wiring 必須在實際 cluster 中驗證後，KEDA 才能依賴 `gthulhu_pod_*` metrics。
+
+這些是 Gthulhu-side verification/fix items，不是 WOMS application-code items。如果 live deployment 沒有暴露 `gthulhu_pod_*{pod_name=...,namespace=...}`，要先修 Gthulhu monitor pod mapping 或 metrics service discovery。
 
 ## 目標架構
 
@@ -176,9 +201,9 @@ max by (pod_name) (rate(gthulhu_pod_involuntary_ctx_switches_total{namespace="wo
 
 Threshold 必須在實際 cluster 校準，不要直接把 WOMS 的數值複製到 SD-Core。
 
-## WOMS Helm 必要修改
+## Gthulhu Preflight 通過後的 WOMS Helm 必要修改
 
-目前 WOMS chart 尚未有 `keda.gthulhu`。建議新增 optional values block：
+目前 WOMS chart 尚未有 `keda.gthulhu`。這個修改應該等 Gthulhu preflight 證明 Prometheus query 會回傳穩定 scalar 後才加入。建議 optional values block：
 
 ```yaml
 keda:
@@ -205,6 +230,8 @@ keda:
 ```
 
 完成後要同步更新 `deploy/helm/woms/chart-static.test.mjs` 與 `scripts/verify-hpa-render.sh`，讓 CI 能驗證 optional prometheus trigger 只在啟用時 render。
+
+如果未來 Gthulhu 提供已驗證的 controller，能完整擁有 WOMS worker scaler，包含 Kafka lag、CPU utilization、Gthulhu Prometheus metrics、HPA name、min/max replicas 與 scale behavior，那這個 Helm 修改可以改成把整個 worker `ScaledObject` 委派給該 controller。不要讓同一個 worker deployment 被兩個 charts 分別控制。
 
 ## Gthulhu PodSchedulingMetrics 草案
 
@@ -239,11 +266,22 @@ spec:
 
 ## PoC 階段
 
-### Phase 1：只觀測
+### Phase 0：Gthulhu Preflight
 
 - 部署或接入 Prometheus/Grafana。
 - 從 `develop` 分支或對應 image/chart 部署 Gthulhu。
-- 確認 Gthulhu monitor `/metrics` 暴露 pod metrics。
+- 確認 monitor 實際有啟動，不只是 manager UI。
+- 確認 Prometheus 能 scrape monitor `/metrics` endpoint。
+- 確認至少有一個 query 回傳 pod-labeled data：
+
+```promql
+count(gthulhu_pod_process_count{pod_name!="",namespace!=""})
+```
+
+- 如果 query 沒有資料，先停止 WOMS HPA integration，修 Gthulhu pod index population 或 ServiceMonitor/service wiring。
+
+### Phase 1：只觀測
+
 - 建立 WOMS `PodSchedulingMetrics`。
 - 從 web UI 執行現有 WOMS HPA peak demo。
 - 確認 Kafka lag 與 Gthulhu worker metrics 在同一段 workload 中變化。

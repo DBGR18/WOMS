@@ -31,6 +31,16 @@ The current KEDA/HPA baseline is:
 - scale-up: 100 percent every 30 seconds, no stabilization window.
 - scale-down: 50 percent every 60 seconds, 120-second stabilization window.
 
+## Confidence Position
+
+This plan is not a 100 percent deployment guarantee yet. It is the safest code-based strategy after reviewing the current WOMS chart and Gthulhu `develop` source. A 100 percent claim requires a live cluster run that proves Gthulhu emits pod-labeled Prometheus metrics, Prometheus can scrape them, KEDA can read the query, and the existing WOMS worker HPA still behaves correctly.
+
+The main correction from the earlier proposal is this:
+
+- Gthulhu manager/API code can list pods with labels and can apply Kubernetes label selectors in its manager-side pod inventory path.
+- The Gthulhu monitor/eBPF path used by `PodSchedulingMetrics` is a different path. On commit `00fc41f`, this path still needs live verification before WOMS can depend on it for HPA.
+- If Gthulhu already provides a fully working, deployment-tested scaler path for this exact use case, WOMS should not duplicate it in application code. WOMS may still need a small Helm change if it wants Kafka, CPU, and Gthulhu metrics in the same existing `ScaledObject`.
+
 ## Goal
 
 Add a Gthulhu-backed scheduling-pressure signal to the existing WOMS scheduler-worker autoscaling path without replacing the current Kafka lag and CPU triggers.
@@ -76,20 +86,35 @@ WOMS does not currently vendor Gthulhu, Prometheus, or Grafana into `deploy/helm
 - Gthulhu Helm owns Gthulhu CRDs, monitor, eBPF collector, ServiceMonitor, and any Gthulhu-specific runtime components.
 - The platform owns Prometheus/Grafana, typically through `kube-prometheus-stack` or an existing monitoring stack.
 
-KEDA must not receive two independent `ScaledObject` resources for the same WOMS worker deployment. Gthulhu has chart support for example KEDA scaling hints, and `PodSchedulingMetrics.spec.scaling` exists in the CRD, but WOMS should not enable those for `woms-woms-worker` in this PoC. The right integration point is the existing WOMS `ScaledObject`: add one optional `prometheus` trigger next to the existing Kafka and CPU triggers.
+KEDA should not receive two independent scaling controllers for the same WOMS worker deployment. KEDA's official `ScaledObject` model puts all triggers for one target workload inside one `ScaledObject`; that `ScaledObject` owns the generated HPA for the target workload. WOMS already has the worker `ScaledObject` that combines Kafka and CPU triggers.
 
-## Important Gthulhu Develop-Branch Limitation
+Gthulhu has a chart-level example `ScaledObject`, and `PodSchedulingMetrics.spec.scaling` exists in the CRD/API model. However, the current code review did not find a production-ready controller path that automatically converts a live `PodSchedulingMetrics.spec.scaling` resource into the exact WOMS worker scaler while preserving WOMS' Kafka trigger, CPU trigger, HPA behavior, and naming. Therefore the default PoC strategy is:
+
+- keep WOMS as the owner of `ScaledObject/woms-woms-worker`;
+- add Gthulhu as one optional prometheus trigger inside that existing object;
+- do not enable Gthulhu's example scaler or PSM scaling hints for `woms-woms-worker` unless a live deployment proves it can own the full combined scaler safely.
+
+## Important Gthulhu Develop-Branch Limitations
 
 On Gthulhu `develop` commit `00fc41f`, `PodSchedulingMetrics` requires `spec.labelSelectors`, and the CRD also exposes `k8sNamespaces`, `commandRegex`, metric flags, and optional scaling hints.
 
-However, `monitor/crdwatcher/watcher.go` currently documents and implements a practical limitation:
+### Label Selector Split
 
-- `psmMatchesPod` checks `k8sNamespaces`.
-- `PodRef` does not carry pod labels.
-- label selector matching is not precise yet.
-- the current code returns `true` after the namespace check, so `labelSelectors` and `commandRegex` must not be treated as hard worker-only selection.
+Gthulhu manager/API and Gthulhu monitor/eBPF do not currently expose the same selector guarantees.
+
+- The manager-side Kubernetes adapter copies `pod.Labels` and uses `selector.Matches(labels.Set(pod.Labels))`, so the manager UI/API can know labels.
+- The monitor path uses `monitor/collector.PodRef`, which currently contains `PodName`, `PodUID`, `Namespace`, and `NodeName`, but no labels.
+- `monitor/crdwatcher/watcher.go` checks `k8sNamespaces`, then documents that `PodRef` does not carry labels and returns `true`. Therefore `labelSelectors` and `commandRegex` must not be treated as hard worker-only selection in the monitor path yet.
 
 That means a short-term WOMS PoC can scope Gthulhu collection to namespace `woms`, but it should use Prometheus label filtering such as `pod_name=~"woms-woms-worker-.*"` when feeding KEDA and Grafana. Before production reuse, Gthulhu should extend `PodRef` and the informer path with labels, then enforce `labelSelectors` and, if needed, command matching.
+
+### Pod Index And Scrape Path Must Be Proven
+
+The monitor collector aggregates eBPF per-PID metrics into pod metrics through `PodMapper.GetPodForPID`. That function needs a pod UID index populated through `SetPodIndex`. In the reviewed `develop` source, `SetPodIndex` is visible in tests, but the monitor startup path does not clearly show a Kubernetes informer populating it in production.
+
+The chart also needs a live scrape check. The current chart has ServiceMonitor templates for manager/sidecar and a monitor-specific ServiceMonitor, but the monitor `/metrics` endpoint and service port wiring must be verified in the running cluster before KEDA depends on `gthulhu_pod_*` metrics.
+
+These are Gthulhu-side verification/fix items, not WOMS application-code items. If the live deployment does not expose `gthulhu_pod_*{pod_name=...,namespace=...}`, fix Gthulhu monitor pod mapping and metrics service discovery first.
 
 ## Target Architecture
 
@@ -176,9 +201,9 @@ max by (pod_name) (rate(gthulhu_pod_involuntary_ctx_switches_total{namespace="wo
 
 Thresholds must be calibrated on the actual cluster. Do not copy thresholds from WOMS directly to SD-Core.
 
-## Required WOMS Helm Change
+## Required WOMS Helm Change After Gthulhu Preflight
 
-The current WOMS chart does not yet have `keda.gthulhu`. Add an optional values block:
+The current WOMS chart does not yet have `keda.gthulhu`. Add this only after Gthulhu preflight proves the Prometheus query returns a stable scalar. The optional values block should be:
 
 ```yaml
 keda:
@@ -205,6 +230,8 @@ Then extend `deploy/helm/woms/templates/keda-scaledobject.yaml` inside the exist
 ```
 
 After that change, update `deploy/helm/woms/chart-static.test.mjs` and `scripts/verify-hpa-render.sh` so CI can prove the optional prometheus trigger renders only when enabled.
+
+If Gthulhu later provides a verified controller that can own the complete WOMS worker scaler, including Kafka lag, CPU utilization, Gthulhu Prometheus metrics, HPA name, min/max replicas, and scale behavior, then this Helm change can be replaced by delegating the whole worker `ScaledObject` to that controller. Do not split ownership between two charts for the same worker deployment.
 
 ## Gthulhu PodSchedulingMetrics Draft
 
@@ -239,11 +266,22 @@ Do not enable `spec.scaling` for this WOMS target during the PoC. Keep scaling i
 
 ## PoC Phases
 
-### Phase 1: Observe Only
+### Phase 0: Gthulhu Preflight
 
 - Deploy or connect Prometheus/Grafana.
 - Deploy Gthulhu from the `develop` branch or the matching image/chart produced from it.
-- Confirm Gthulhu monitor `/metrics` exposes pod metrics.
+- Confirm the monitor is actually running, not only the manager UI.
+- Confirm Prometheus can scrape the monitor `/metrics` endpoint.
+- Confirm at least one query returns pod-labeled data:
+
+```promql
+count(gthulhu_pod_process_count{pod_name!="",namespace!=""})
+```
+
+- If the query returns no data, stop the WOMS HPA integration and fix Gthulhu pod index population or ServiceMonitor/service wiring first.
+
+### Phase 1: Observe Only
+
 - Create the WOMS `PodSchedulingMetrics`.
 - Run the existing WOMS HPA peak demo from the web UI.
 - Confirm Kafka lag and Gthulhu worker metrics move during the same workload.

@@ -4,11 +4,19 @@ on:
   pull_request:
     branches:
       - "main"
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - "README*.md"
   push:
     branches:
       - "feat/**"
       - "main"
       - "release/**"
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - "README*.md"
 
 jobs:
   test:

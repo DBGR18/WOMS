@@ -10,6 +10,10 @@ on:
     branches:
       - "main"
       - "release/**"
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - "README*.md"
 
 permissions:
   contents: write
