@@ -225,7 +225,7 @@ Verify the deployed resources before treating the install as complete:
 
 ```bash
 kubectl get pod,deploy,statefulset,job,pvc,scaledobject,hpa,pdb -n woms
-NAMESPACE=woms ./scripts/verify-k8s.sh
+KUBECTL=microk8s.kubectl HELM=microk8s.helm3 NAMESPACE=woms ./scripts/verify-k8s.sh
 ```
 
 The chart generates or reuses a JWT signing secret when `api.jwtSecret` is unset. Retrieve it with:
@@ -234,9 +234,9 @@ The chart generates or reuses a JWT signing secret when `api.jwtSecret` is unset
 kubectl get secret woms-woms-api -n woms -o jsonpath='{.data.JWT_SECRET}' | base64 -d
 ```
 
-The bundled PostgreSQL, Redis, and Kafka defaults are for local or VM demos. Production deployments should use a custom values file with explicit external service endpoints, credentials, `api.jwtSecret`, and, for forked image builds, `imageRegistry`.
+The chart now bundles PostgreSQL, Redis, and Kafka by default for local or VM demos, so installs can create dependency StatefulSets and PVC-backed storage as part of the release. Production deployments should use a custom values file with explicit external service endpoints, credentials, `api.jwtSecret`, and, for forked image builds, `imageRegistry`.
 
-The chart pins the Bitnami dependency image tags used by the dependency chart versions. Docker Hub no longer serves those retained tags from `bitnami/*`, so the default values override PostgreSQL, Redis, Kafka, and the Kafka topic hook to `bitnamilegacy/*`.
+The bundled dependency chart versions pin specific Bitnami image tags. Docker Hub no longer serves those retained tags from `bitnami/*`, so the default values override PostgreSQL, Redis, Kafka, and the Kafka topic hook to `bitnamilegacy/*`.
 
 For the single-node MicroK8s demo, the chart also sets Kafka internal topic replication values to `1`, including `offsets.topic.replication.factor`. Without that, `__consumer_offsets` defaults to replication factor `3`, the scheduler worker cannot create `woms-scheduler-workers`, and KEDA cannot read the Kafka lag metric.
 

@@ -235,7 +235,9 @@ NAMESPACE=woms ./scripts/verify-k8s.sh
 kubectl get secret woms-woms-api -n woms -o jsonpath='{.data.JWT_SECRET}' | base64 -d
 ```
 
-內建 PostgreSQL、Redis 與 Kafka 預設值只供本機或 VM demo 使用。正式環境應使用自訂 values file，明確設定外部服務 endpoint、credentials、`api.jwtSecret`；若使用 fork 後自行建置的 images，也應設定 `imageRegistry`。
+目前 Helm chart 會一併安裝內建 PostgreSQL、Redis 與 Kafka dependencies，供本機、單節點 MicroK8s 或 VM demo 使用，並建立對應的 StatefulSet / PVC。這些預設僅適合示範與開發環境，不建議直接用於正式環境。
+
+正式環境應使用自訂 values file，明確設定外部服務 endpoint、credentials、`api.jwtSecret`；若使用 fork 後自行建置的 images，也應設定 `imageRegistry`。
 
 Chart 會固定 dependency chart 版本使用的 Bitnami image tags。Docker Hub 已不再從 `bitnami/*` 提供這些保留 tags，因此預設 values 會把 PostgreSQL、Redis、Kafka 與 Kafka topic hook 覆寫到 `bitnamilegacy/*`。
 

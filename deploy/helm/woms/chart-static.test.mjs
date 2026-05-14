@@ -95,8 +95,8 @@ test("Bitnami dependency image overrides use the legacy repository for retained 
   assert.match(values, /postgresql:[\s\S]*tag:\s+16\.4\.0-debian-12-r14/);
   assert.match(values, /redis:[\s\S]*repository:\s+bitnamilegacy\/redis/);
   assert.match(values, /redis:[\s\S]*tag:\s+7\.2\.5-debian-12-r4/);
-  assert.match(values, /kafka:[\s\S]*repository:\s+bitnamilegacy\/kafka/);
-  assert.match(values, /kafka:[\s\S]*tag:\s+3\.7\.1-debian-12-r4/);
+  assert.match(values, /^kafka:\n(?:^[ \t]+[^\n]*\n)*?^[ \t]+image:\n(?:^[ \t]+[^\n]*\n)*?^[ \t]+repository:\s+bitnamilegacy\/kafka\s*$/m);
+  assert.match(values, /^kafka:\n(?:^[ \t]+[^\n]*\n)*?^[ \t]+image:\n(?:^[ \t]+[^\n]*\n)*?^[ \t]+tag:\s+3\.7\.1-debian-12-r4\s*$/m);
 });
 
 test("Single-node Kafka defaults keep internal topics usable on a clean VM", () => {

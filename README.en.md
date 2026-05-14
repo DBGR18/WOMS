@@ -225,7 +225,7 @@ Verify the deployed resources before treating the install as complete:
 
 ```bash
 kubectl get pod,deploy,statefulset,job,pvc,scaledobject,hpa,pdb -n woms
-NAMESPACE=woms ./scripts/verify-k8s.sh
+KUBECTL=microk8s.kubectl HELM=microk8s.helm3 NAMESPACE=woms ./scripts/verify-k8s.sh
 ```
 
 The chart generates or reuses a JWT signing secret when `api.jwtSecret` is unset. Retrieve it with:
@@ -234,7 +234,7 @@ The chart generates or reuses a JWT signing secret when `api.jwtSecret` is unset
 kubectl get secret woms-woms-api -n woms -o jsonpath='{.data.JWT_SECRET}' | base64 -d
 ```
 
-The bundled PostgreSQL, Redis, and Kafka defaults are for local or VM demos. Production deployments should use a custom values file with explicit external service endpoints, credentials, `api.jwtSecret`, and, for forked image builds, `imageRegistry`.
+The chart now deploys bundled PostgreSQL, Redis, and Kafka dependencies by default for local or VM demos, including their stateful workloads and storage. Production deployments should instead use a custom values file with explicit external service endpoints, credentials, `api.jwtSecret`, and, for forked image builds, `imageRegistry`.
 
 The chart pins the Bitnami dependency image tags used by the dependency chart versions. Docker Hub no longer serves those retained tags from `bitnami/*`, so the default values override PostgreSQL, Redis, Kafka, and the Kafka topic hook to `bitnamilegacy/*`.
 

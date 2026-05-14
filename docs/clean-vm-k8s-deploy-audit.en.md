@@ -4,7 +4,7 @@ Updated at: 2026-05-14 UTC
 
 ## Conclusion
 
-The WOMS clean-VM Kubernetes deployment was verified on the `origin/main` / `v0.1.27` base. No push was performed.
+The WOMS clean-VM Kubernetes deployment was verified on the `origin/main` / `v0.1.28` base. No push was performed.
 
 Final status: passed.
 
@@ -288,7 +288,7 @@ Happy failures=0 ready=True active=True
 
 ## Updated Files
 
-- `deploy/helm/woms/values.yaml`: updated to v0.1.27 app image tags; keeps `bitnamilegacy` dependency images; changes KEDA Kafka bootstrap to a namespace FQDN; adds single-node Kafka internal topic replication settings.
+- `deploy/helm/woms/values.yaml`: updated to v0.1.28 app image tags; keeps `bitnamilegacy` dependency images; changes KEDA Kafka bootstrap to a namespace FQDN; adds single-node Kafka internal topic replication settings.
 - `deploy/helm/woms/templates/keda-scaledobject.yaml`: renders Kafka bootstrap with `tpl`.
 - `deploy/helm/woms/templates/kafka-topic-job.yaml`: renders Kafka topic hook bootstrap with `tpl`.
 - `deploy/helm/woms/templates/worker-deployment.yaml`: renders worker `KAFKA_BROKERS` with `tpl`.

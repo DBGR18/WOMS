@@ -288,7 +288,7 @@ Happy failures=0 ready=True active=True
 
 ## 更新的檔案
 
-- `deploy/helm/woms/values.yaml`：更新到 v0.1.27 image tags；保留 `bitnamilegacy` dependency images；KEDA Kafka bootstrap 改為 namespace FQDN；新增 single-node Kafka internal topic replication settings。
+- `deploy/helm/woms/values.yaml`：更新到 v0.1.28 image tags；保留 `bitnamilegacy` dependency images；KEDA Kafka bootstrap 改為 namespace FQDN；新增 single-node Kafka internal topic replication settings。
 - `deploy/helm/woms/templates/keda-scaledobject.yaml`：Kafka bootstrap 使用 `tpl` render。
 - `deploy/helm/woms/templates/kafka-topic-job.yaml`：Kafka topic hook bootstrap 使用 `tpl` render。
 - `deploy/helm/woms/templates/worker-deployment.yaml`：worker `KAFKA_BROKERS` 使用 `tpl` render。

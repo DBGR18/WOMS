@@ -90,7 +90,8 @@ require_keda_external_metric() {
   [ -n "$metric_name" ]
   "$KUBECTL" get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/${NAMESPACE}/${metric_name}?labelSelector=scaledobject.keda.sh%2Fname%3D${RELEASE}-woms-worker" \
     >/tmp/woms-keda-external-metric.json
-  grep -q '"items"' /tmp/woms-keda-external-metric.json
+  grep -Eq '"items"[[:space:]]*:[[:space:]]*\[[[:space:]]*\{' /tmp/woms-keda-external-metric.json
+  grep -Eq '"value"[[:space:]]*:[[:space:]]*"[^"]+"' /tmp/woms-keda-external-metric.json
 }
 
 "$HELM" template "$RELEASE" "$CHART" --dependency-update --namespace "$NAMESPACE" --set "ingress.enabled=${INGRESS_ENABLED}" >/tmp/woms-rendered.yaml
