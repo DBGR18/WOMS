@@ -183,6 +183,24 @@ A clean VM deployment should have two layers:
 
 Users should not manually patch the web deployment, create Kafka topics, or tune topic partitions. Those operational details must be handled by the image, Helm chart, or platform bootstrap.
 
+Example single-VM platform setup with MicroK8s:
+
+```bash
+sudo snap install microk8s --classic --channel=1.35/stable
+sudo usermod -aG microk8s "$USER"
+newgrp microk8s
+microk8s status --wait-ready
+microk8s enable dns hostpath-storage metrics-server
+microk8s enable community
+microk8s enable keda
+microk8s kubectl get node
+microk8s kubectl get pods -A
+```
+
+Do not continue until the platform pods are healthy. `microk8s kubectl get pods -A` should show the `kube-system` and `keda` pods as `Running`, and namespace events should not contain `MissingClusterDNS`. If `MissingClusterDNS` appears, rerun `microk8s enable dns` in a shell that can complete its sudo-backed kubelet update, then confirm kubelet has `--cluster-dns=10.152.183.10` and `--cluster-domain=cluster.local`.
+
+If you use MicroK8s instead of standalone `kubectl` and `helm`, either alias the commands for the current shell or replace the commands below with `microk8s kubectl` and `microk8s helm3`.
+
 Render Helm:
 
 ```bash
@@ -196,6 +214,13 @@ helm upgrade --install woms ./deploy/helm/woms --dependency-update \
   --namespace woms --create-namespace
 ```
 
+Verify the deployed resources before treating the install as complete:
+
+```bash
+kubectl get pod,deploy,statefulset,job,pvc,scaledobject,hpa,pdb -n woms
+NAMESPACE=woms ./scripts/verify-k8s.sh
+```
+
 The chart generates or reuses a JWT signing secret when `api.jwtSecret` is unset. Retrieve it with:
 
 ```bash
@@ -203,6 +228,19 @@ kubectl get secret woms-woms-api -n woms -o jsonpath='{.data.JWT_SECRET}' | base
 ```
 
 The bundled PostgreSQL, Redis, and Kafka defaults are for local or VM demos. Production deployments should use a custom values file with explicit external service endpoints, credentials, `api.jwtSecret`, and, for forked image builds, `imageRegistry`.
+
+The chart pins the Bitnami dependency image tags used by the dependency chart versions. Docker Hub no longer serves those retained tags from `bitnami/*`, so the default values override PostgreSQL, Redis, Kafka, and the Kafka topic hook to `bitnamilegacy/*`.
+
+For the single-node MicroK8s demo, the chart also sets Kafka internal topic replication values to `1`, including `offsets.topic.replication.factor`. Without that, `__consumer_offsets` defaults to replication factor `3`, the scheduler worker cannot create `woms-scheduler-workers`, and KEDA cannot read the Kafka lag metric.
+
+If a previous install exists, Bitnami dependencies can require existing generated passwords during `helm upgrade`. For a clean VM demo, remove the old release and PVCs intentionally before reinstalling. For a real upgrade, follow the password hints printed by Helm and pass the existing secrets.
+
+If the Kafka topic hook does not complete, inspect it with:
+
+```bash
+kubectl get job,pod -n woms -l app.kubernetes.io/component=kafka-topic
+kubectl logs job/woms-woms-kafka-topic -n woms
+```
 
 For a local or VM demo, expose the web UI with port-forward:
 

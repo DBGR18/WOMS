@@ -184,6 +184,24 @@ docker build -f Dockerfile.web -t woms-web:local .
 
 使用者不應手動 patch web deployment、手動建立 Kafka topic，或手動調整 topic partitions。這些都必須由 image、Helm chart 或平台 bootstrap 自動處理。
 
+單一 VM 使用 MicroK8s 的平台準備範例：
+
+```bash
+sudo snap install microk8s --classic --channel=1.35/stable
+sudo usermod -aG microk8s "$USER"
+newgrp microk8s
+microk8s status --wait-ready
+microk8s enable dns hostpath-storage metrics-server
+microk8s enable community
+microk8s enable keda
+microk8s kubectl get node
+microk8s kubectl get pods -A
+```
+
+平台 pods 健康前不要繼續部署 WOMS。`microk8s kubectl get pods -A` 應顯示 `kube-system` 與 `keda` pods 都是 `Running`，namespace events 不應出現 `MissingClusterDNS`。如果看到 `MissingClusterDNS`，請在能完成 sudo-backed kubelet 更新的 shell 重新執行 `microk8s enable dns`，再確認 kubelet 有 `--cluster-dns=10.152.183.10` 與 `--cluster-domain=cluster.local`。
+
+若使用 MicroK8s 而不是獨立安裝的 `kubectl` 與 `helm`，可以先在目前 shell 設定 alias，或把下方指令改成 `microk8s kubectl` 與 `microk8s helm3`。
+
 Render Helm：
 
 ```bash
@@ -197,6 +215,13 @@ helm upgrade --install woms ./deploy/helm/woms --dependency-update \
   --namespace woms --create-namespace
 ```
 
+部署後先驗證資源，再視為安裝完成：
+
+```bash
+kubectl get pod,deploy,statefulset,job,pvc,scaledobject,hpa,pdb -n woms
+NAMESPACE=woms ./scripts/verify-k8s.sh
+```
+
 當 `api.jwtSecret` 未設定時，chart 會自動產生或重用 JWT signing secret。可用下列指令取得：
 
 ```bash
@@ -204,6 +229,19 @@ kubectl get secret woms-woms-api -n woms -o jsonpath='{.data.JWT_SECRET}' | base
 ```
 
 內建 PostgreSQL、Redis 與 Kafka 預設值只供本機或 VM demo 使用。正式環境應使用自訂 values file，明確設定外部服務 endpoint、credentials、`api.jwtSecret`；若使用 fork 後自行建置的 images，也應設定 `imageRegistry`。
+
+Chart 會固定 dependency chart 版本使用的 Bitnami image tags。Docker Hub 已不再從 `bitnami/*` 提供這些保留 tags，因此預設 values 會把 PostgreSQL、Redis、Kafka 與 Kafka topic hook 覆寫到 `bitnamilegacy/*`。
+
+單節點 MicroK8s demo 中，chart 也會把 Kafka internal topic replication 設為 `1`，包含 `offsets.topic.replication.factor`。若未設定，`__consumer_offsets` 會沿用 replication factor `3`，scheduler worker 無法建立 `woms-scheduler-workers` consumer group，KEDA 也無法讀取 Kafka lag metric。
+
+如果環境中已有舊 release，Bitnami dependencies 在 `helm upgrade` 時可能要求帶入既有自動產生的 passwords。乾淨 VM demo 應先明確刪除舊 release 與 PVC 後再重新安裝；真正升級時則依 Helm 錯誤訊息提示，把既有 secrets 帶入。
+
+如果 Kafka topic hook 沒有完成，可用下列指令檢查：
+
+```bash
+kubectl get job,pod -n woms -l app.kubernetes.io/component=kafka-topic
+kubectl logs job/woms-woms-kafka-topic -n woms
+```
 
 本機或 VM demo 可用 port-forward 開啟前端：
 
