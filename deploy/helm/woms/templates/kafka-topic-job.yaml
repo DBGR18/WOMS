@@ -32,7 +32,7 @@ spec:
             - -ec
             - |
               topic={{ .Values.keda.kafka.topic | quote }}
-              bootstrap={{ .Values.keda.kafka.bootstrapServers | quote }}
+              bootstrap={{ tpl .Values.keda.kafka.bootstrapServers . | quote }}
               partitions={{ $partitions }}
               replication={{ .Values.kafkaTopic.replicationFactor | int }}
               max_attempts={{ .Values.kafkaTopic.wait.maxAttempts | int }}
