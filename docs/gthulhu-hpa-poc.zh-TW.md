@@ -199,7 +199,7 @@ avg(rate(gthulhu_pod_numa_migrations_total{namespace="woms",pod_name=~"woms-woms
 max by (pod_name) (rate(gthulhu_pod_involuntary_ctx_switches_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
 ```
 
-Threshold 必須在實際 cluster 校準，不要直接把 WOMS 的數值複製到 SD-Core。
+Threshold 必須在實際 WOMS cluster 校準。
 
 ## Gthulhu Preflight 通過後的 WOMS Helm 必要修改
 
@@ -301,12 +301,6 @@ count(gthulhu_pod_process_count{pod_name!="",namespace!=""})
 - 確認 Gthulhu 只在 worker pods 真的出現 scheduling pressure 時提早 scale-out。
 - 確認 scale-down 仍遵守既有 120 秒 cooldown 與 stabilization behavior。
 
-### Phase 4：抽象到 SD-Core
-
-- 把 namespace、pod selector、query、threshold 與 target deployment 變成可重用 values。
-- SMF 可把 Gthulhu scheduling pressure 與 control-plane request/session/PFCP queue signals 結合。
-- UPF 只能把 Gthulhu 當 pressure signal；UPF scale-out 仍需要 traffic steering、PFCP state handling 與 datapath consistency。
-
 ## 驗證方式
 
 WOMS static 與 unit checks：
@@ -377,9 +371,6 @@ Grafana dashboard 最少應包含：
 
 4. **Gthulhu 不是 backlog signal**
    Kafka lag 仍是主要 queue-depth source。Gthulhu 用來提供 runtime scheduling evidence。
-
-5. **UPF 不能只靠 HPA 解決**
-   Gthulhu 可以改善 pressure detection，但 UPF scaling 還需要 packet steering 與 5GC session/datapath coordination。
 
 ## 建議結論
 

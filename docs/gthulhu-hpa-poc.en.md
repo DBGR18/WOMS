@@ -199,7 +199,7 @@ avg(rate(gthulhu_pod_numa_migrations_total{namespace="woms",pod_name=~"woms-woms
 max by (pod_name) (rate(gthulhu_pod_involuntary_ctx_switches_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
 ```
 
-Thresholds must be calibrated on the actual cluster. Do not copy thresholds from WOMS directly to SD-Core.
+Thresholds must be calibrated on the actual WOMS cluster.
 
 ## Required WOMS Helm Change After Gthulhu Preflight
 
@@ -301,12 +301,6 @@ count(gthulhu_pod_process_count{pod_name!="",namespace!=""})
 - Check whether Gthulhu causes earlier scale-out only when worker pods show real scheduling pressure.
 - Confirm scale-down still follows the existing 120-second cooldown and stabilization behavior.
 
-### Phase 4: Generalize Toward SD-Core
-
-- Turn namespace, pod selector, query, threshold, and target deployment into reusable values.
-- For SMF, combine Gthulhu scheduling pressure with control-plane request/session/PFCP queue signals.
-- For UPF, treat Gthulhu as a pressure signal only; UPF scale-out still needs traffic steering, PFCP state handling, and datapath consistency.
-
 ## Verification
 
 WOMS static and unit checks:
@@ -377,9 +371,6 @@ Grafana dashboard minimum panels:
 
 4. **Gthulhu is not a backlog signal**
    Kafka lag remains the main queue-depth source. Gthulhu is for runtime scheduling evidence.
-
-5. **UPF scale-out is not solved by HPA alone**
-   Gthulhu can improve pressure detection, but UPF scaling also needs packet steering and 5GC session/datapath coordination.
 
 ## Recommendation
 
