@@ -4,7 +4,7 @@
 
 ## 結論
 
-本次已在 `origin/main` / `v0.1.27` 基底上完成 WOMS clean VM Kubernetes 部署驗證。沒有 push。
+本次已在 `origin/main` / `v0.1.28` 基底上完成 WOMS clean VM Kubernetes 部署驗證。沒有 push。
 
 最終狀態：通過。
 
