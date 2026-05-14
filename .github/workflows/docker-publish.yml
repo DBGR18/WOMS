@@ -101,15 +101,27 @@ jobs:
           import os
           path = Path("deploy/helm/woms/values.yaml")
           release_tag = os.environ["RELEASE_TAG"]
-          text = path.read_text()
+          text = path.read_text(encoding="utf-8")
+          app_sections = {"api", "worker", "web"}
+          current_section = None
+          in_app_image = False
           lines = []
           for line in text.splitlines():
-              if line.strip().startswith("tag: "):
+              stripped = line.strip()
+              if line and not line.startswith((" ", "\t")) and stripped.endswith(":"):
+                  current_section = stripped[:-1]
+                  in_app_image = False
+              elif current_section in app_sections and line.startswith("  image:"):
+                  in_app_image = True
+              elif current_section in app_sections and line.startswith("  ") and not line.startswith("    "):
+                  in_app_image = False
+
+              if current_section in app_sections and in_app_image and stripped.startswith("tag: "):
                   indent = line[: len(line) - len(line.lstrip())]
                   lines.append(f"{indent}tag: {release_tag}")
               else:
                   lines.append(line)
-          path.write_text("\n".join(lines) + "\n")
+          path.write_text("\n".join(lines) + "\n", encoding="utf-8")
           PY
 
       - name: Commit Helm tag update
