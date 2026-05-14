@@ -1,124 +1,151 @@
-# WOMS Gthulhu HPA PoC Proposal
+# WOMS Gthulhu HPA PoC Design
+
+## Source Baseline
+
+This document is based on the current WOMS repository state and the local Gthulhu repository at `/home/ubuntu/Gthulhu` on branch `develop`, commit `00fc41f`. Before this update, the Gthulhu source was refreshed with:
+
+```bash
+cd /home/ubuntu/Gthulhu
+git pull origin develop
+```
+
+Git reported `Already up to date.`
+
+The current WOMS architecture is no longer only a deployment skeleton. The Helm chart deploys:
+
+- Go API deployment `woms-woms-api`, default `2` replicas, JWT/RBAC, PostgreSQL store, Redis address, Kafka publisher, readiness/liveness probes, and a PDB `woms-woms-api` with `minAvailable: 1`.
+- Static web deployment `woms-woms-web`, default `2` replicas, NGINX proxy to the API, non-root read-only filesystem settings, and a PDB `woms-woms-web` with `minAvailable: 1`.
+- Go scheduler worker deployment `woms-woms-worker`, default `1` replica, Kafka consumer group `woms-scheduler-workers`, PostgreSQL access, retry settings, and worker resources.
+- PostgreSQL, Redis, and Kafka Helm dependencies enabled by default for local or clean-VM demos.
+- A Kafka topic hook job that creates `woms.schedule.jobs`; when `kafkaTopic.partitions` is `0`, it uses `keda.maxReplicaCount`, so the topic has enough partitions for scaled workers.
+- KEDA `ScaledObject` `woms-woms-worker`, which creates HPA `woms-woms-worker-hpa` targeting `Deployment/woms-woms-worker`.
+
+The current KEDA/HPA baseline is:
+
+- Kafka trigger enabled by default.
+- CPU trigger enabled by default.
+- `minReplicaCount: 1`.
+- `maxReplicaCount: 10`.
+- `pollingInterval: 30`.
+- `cooldownPeriod: 120`.
+- scale-up: 100 percent every 30 seconds, no stabilization window.
+- scale-down: 50 percent every 60 seconds, 120-second stabilization window.
 
 ## Goal
 
-This proposal upgrades the existing WOMS `scheduler-worker` HPA scenario into a Gthulhu-backed autoscaling PoC. WOMS should keep its current KEDA/HPA model with Kafka lag as the primary signal, then add pod-level scheduling information from Gthulhu as a second scaling signal. The HPA will then react not only to backlog or average CPU utilization, but also to the kernel scheduling pressure actually observed by worker pods on Kubernetes nodes.
+Add a Gthulhu-backed scheduling-pressure signal to the existing WOMS scheduler-worker autoscaling path without replacing the current Kafka lag and CPU triggers.
 
-The PoC does not replace the current WOMS HPA design. It establishes a reusable autoscaling pattern for future SD-Core SMF/UPF integration:
+The target NF-like component in WOMS is `scheduler-worker`: it is the asynchronous scheduling executor. The API accepts schedule requests and publishes jobs to Kafka; the worker consumes `woms.schedule.jobs`, locks each production line while scheduling, persists allocations to PostgreSQL, and records audit results. During the HPA demo, the API creates 200 lines, 1,000 pending orders, and 200 queued jobs, then workers drain the backlog through consumer group `woms-scheduler-workers`.
+
+The PoC should prove this loop:
 
 ```text
-workload pod information
-  -> Gthulhu eBPF pod scheduling metrics
-  -> Prometheus
-  -> Grafana dashboard / operational observation
-  -> KEDA prometheus trigger
-  -> Kubernetes HPA
-  -> target workload replicas
+WOMS scheduling workload
+  -> Kafka backlog on woms.schedule.jobs
+  -> scheduler-worker pods consume jobs
+  -> Gthulhu eBPF monitor observes pod scheduling events
+  -> Prometheus stores Gthulhu pod metrics
+  -> WOMS KEDA ScaledObject adds one prometheus trigger
+  -> KEDA-created HPA adjusts Deployment/woms-woms-worker replicas
 ```
 
-## Why Use Gthulhu
+## Why Gthulhu Belongs In This PoC
 
-The current WOMS HPA pressure source is mainly Kafka lag on `woms.schedule.jobs`. That answers whether scheduling jobs are piling up, but it does not answer whether the worker pods are being delayed by CPU scheduling, frequent preemption, excessive migration, or noisy neighbors on the node. Gthulhu fills that gap.
+Kafka lag answers whether scheduling jobs are waiting. CPU utilization answers whether worker containers are busy. Neither signal proves that a worker pod is delayed by kernel scheduling pressure, preemption, CPU migration, NUMA migration, or noisy neighbors on the node.
 
-The main reasons to use Gthulhu are:
+Gthulhu fills that gap by collecting pod-level scheduling metrics from the node/kernel layer. On the current `develop` branch, the Prometheus collector exposes these metric names with labels `pod_name`, `pod_uid`, `namespace`, and `node_name`:
 
-1. **Pod-level kernel scheduling pressure**
-   Gthulhu uses eBPF to collect per-process scheduling events and aggregate them into pod-level metrics such as `wait_time_ns`, `run_count`, `involuntary_ctx_switches`, `cpu_migrations`, `numa_migrations`, and `process_count`. These metrics are closer to "is the pod being delayed by scheduling pressure?" than Kubernetes CPU utilization.
+- `gthulhu_pod_voluntary_ctx_switches_total`
+- `gthulhu_pod_involuntary_ctx_switches_total`
+- `gthulhu_pod_cpu_time_nanoseconds_total`
+- `gthulhu_pod_wait_time_nanoseconds_total`
+- `gthulhu_pod_run_count_total`
+- `gthulhu_pod_cpu_migrations_total`
+- `gthulhu_pod_smt_migrations_total`
+- `gthulhu_pod_l3_migrations_total`
+- `gthulhu_pod_numa_migrations_total`
+- `gthulhu_pod_process_count`
 
-2. **No WOMS application code changes**
-   WOMS does not need custom instrumentation in the Go API or worker to expose scheduling pressure. Gthulhu observes pods from the node/kernel layer, which makes it suitable as a supervisory deployment capability.
+For WOMS, `involuntary_ctx_switches`, `wait_time`, `cpu_migrations`, and `numa_migrations` are the most useful first metrics. They are closer to runtime scheduling pressure than average CPU utilization.
 
-3. **Kubernetes-native operation through KEDA/HPA**
-   Gthulhu does not need to directly control replica counts. It exposes metrics to Prometheus, and KEDA's prometheus trigger feeds them into HPA. This extends the current WOMS Helm/KEDA/HPA architecture instead of replacing it with a separate autoscaler.
+## Current Integration Boundary
 
-4. **Observability and threshold calibration**
-   Prometheus is required for the Gthulhu-backed HPA data path because KEDA needs the prometheus trigger to query Gthulhu metrics. Grafana is not required for HPA itself, but it should be part of the PoC so operators can correlate Kafka lag, worker replicas, Gthulhu scheduling pressure, and HPA events instead of seeing replica changes without knowing why they happened.
+WOMS does not currently vendor Gthulhu, Prometheus, or Grafana into `deploy/helm/woms`. That boundary should remain for the first PoC:
 
-5. **A practical bridge to SD-Core SMF/UPF**
-   SMF and UPF are more sensitive to CPU scheduling jitter, preemption, migration, NUMA locality, and packet-processing latency. Validating the "Gthulhu pod information -> KEDA -> HPA" loop with WOMS first makes it easier to reuse the same pattern for SMF control-plane pods or UPF data-plane pods.
+- WOMS Helm owns WOMS workloads, PostgreSQL, Redis, Kafka, the worker `ScaledObject`, PDBs, and optional Ingress.
+- Gthulhu Helm owns Gthulhu CRDs, monitor, eBPF collector, ServiceMonitor, and any Gthulhu-specific runtime components.
+- The platform owns Prometheus/Grafana, typically through `kube-prometheus-stack` or an existing monitoring stack.
 
-6. **Better high-pressure diagnosis than CPU alone**
-   High CPU utilization does not always mean scale-out is needed, and low CPU utilization can still hide run-queue wait or preemption problems. Gthulhu metrics complement Kafka lag and CPU utilization with runtime scheduling evidence.
+KEDA must not receive two independent `ScaledObject` resources for the same WOMS worker deployment. Gthulhu has chart support for example KEDA scaling hints, and `PodSchedulingMetrics.spec.scaling` exists in the CRD, but WOMS should not enable those for `woms-woms-worker` in this PoC. The right integration point is the existing WOMS `ScaledObject`: add one optional `prometheus` trigger next to the existing Kafka and CPU triggers.
 
-## Relationship Between WOMS And Gthulhu
+## Important Gthulhu Develop-Branch Limitation
 
-The WOMS `scheduler-worker` is a Kafka consumer. During end-of-month scheduling, rush-order recovery, or demo peak generation, many jobs are published to `woms.schedule.jobs`. Kafka lag rises, and KEDA currently creates and drives `woms-woms-worker-hpa` for `Deployment/woms-woms-worker`.
+On Gthulhu `develop` commit `00fc41f`, `PodSchedulingMetrics` requires `spec.labelSelectors`, and the CRD also exposes `k8sNamespaces`, `commandRegex`, metric flags, and optional scaling hints.
 
-Gthulhu becomes the supervisory feedback layer in this scenario:
+However, `monitor/crdwatcher/watcher.go` currently documents and implements a practical limitation:
 
-- Gthulhu monitors WOMS worker pods.
-- The eBPF collector gathers worker pod scheduling metrics.
-- Prometheus scrapes Gthulhu `/metrics`.
-- The WOMS KEDA `ScaledObject` adds a prometheus trigger.
-- HPA uses Kafka lag, CPU utilization, and Gthulhu scheduling pressure together to decide worker replicas.
+- `psmMatchesPod` checks `k8sNamespaces`.
+- `PodRef` does not carry pod labels.
+- label selector matching is not precise yet.
+- the current code returns `true` after the namespace check, so `labelSelectors` and `commandRegex` must not be treated as hard worker-only selection.
 
-The PoC should target only `scheduler-worker` first, not API/web. The worker pressure source is clear, the Kafka lag baseline already exists, and scaling worker pods does not directly change the request-path availability model.
+That means a short-term WOMS PoC can scope Gthulhu collection to namespace `woms`, but it should use Prometheus label filtering such as `pod_name=~"woms-woms-worker-.*"` when feeding KEDA and Grafana. Before production reuse, Gthulhu should extend `PodRef` and the informer path with labels, then enforce `labelSelectors` and, if needed, command matching.
 
-## Proposed Architecture
+## Target Architecture
 
 ```text
-WOMS API
+User / web UI
+  -> Go API
+  -> PostgreSQL schedule_jobs row
   -> Kafka topic woms.schedule.jobs
-  -> WOMS scheduler-worker pods
-        ^
-        |
-        | pod/process scheduling observation
-        |
-Gthulhu DaemonSet / monitor
-  -> eBPF scheduling metrics
-  -> Prometheus metrics:
-       gthulhu_pod_wait_time_nanoseconds_total
-       gthulhu_pod_involuntary_ctx_switches_total
-       gthulhu_pod_cpu_migrations_total
-       gthulhu_pod_numa_migrations_total
-  -> Grafana dashboards:
-       worker backlog / replicas / scheduling pressure
-  -> KEDA prometheus trigger
+  -> scheduler-worker pods
+       -> PostgreSQL schedule_allocations
+       -> audit_logs
+
+KEDA baseline:
+  Kafka lag trigger + CPU trigger
+  -> ScaledObject woms-woms-worker
   -> HPA woms-woms-worker-hpa
-  -> Deployment woms-woms-worker replicas
+  -> Deployment woms-woms-worker
+
+Gthulhu PoC extension:
+  Gthulhu monitor / eBPF collector
+  -> Prometheus scrape of /metrics
+  -> PromQL query filtered to worker pods
+  -> WOMS ScaledObject prometheus trigger
+  -> same HPA woms-woms-worker-hpa
 ```
 
-## Prometheus / Grafana Plan
+Grafana is not part of HPA decision-making. It is required operationally for this PoC because thresholds cannot be chosen safely without seeing Kafka lag, worker replicas, HPA desired replicas, Gthulhu metrics, and HPA events together.
 
-WOMS does not currently deploy Prometheus or Grafana. The current HPA path uses KEDA's Kafka trigger, the CPU trigger, and `metrics-server`. After Gthulhu is introduced, Prometheus and Grafana should be positioned as follows:
+## Scaling Signal Policy
 
-- **Prometheus: required**
-  Gthulhu pod scheduling metrics must be scraped by Prometheus, and KEDA's prometheus trigger needs Prometheus queries to convert Gthulhu metrics into HPA external metrics. Without Prometheus, the Gthulhu -> KEDA -> HPA loop cannot be completed.
+### Primary Signal: Kafka Lag
 
-- **Grafana: included in the PoC as an observation and calibration tool**
-  Grafana does not directly participate in HPA decisions, but the PoC should include dashboards for Kafka lag, worker replicas, HPA desired replicas, Gthulhu `involuntary_ctx_switches`, `wait_time`, `cpu_migrations`, and `numa_migrations`. This helps calibrate thresholds and identify whether scale-out is caused by backlog, CPU, or kernel scheduling pressure.
-
-- **metrics-server: keep it**
-  `metrics-server` still provides the resource metrics needed by the current CPU trigger. Prometheus/Grafana do not replace it.
-
-The PoC monitoring stack should use `kube-prometheus-stack` or an existing platform Prometheus/Grafana. The WOMS Helm chart does not need to vendor the monitoring stack directly, but deployment and verification docs should list Prometheus/Grafana as prerequisites for the Gthulhu HPA PoC.
-
-## Scaling Signal Design
-
-### Keep The Existing Primary Signal: Kafka Lag
-
-Kafka lag remains the primary autoscaling signal for WOMS workers:
+Keep Kafka lag as the primary WOMS worker autoscaling signal:
 
 - topic: `woms.schedule.jobs`
 - consumer group: `woms-scheduler-workers`
-- threshold: `keda.kafka.lagThreshold`
-- purpose: represent scheduling jobs that workers have not consumed yet
+- threshold: `keda.kafka.lagThreshold`, currently `"10"`
+- reason: backlog directly represents scheduling work not yet consumed
 
-### Keep The Existing Secondary Signal: CPU Utilization
+### Secondary Signal: CPU Utilization
 
-The CPU trigger remains a secondary signal for compute-heavy scheduling bursts:
+Keep CPU utilization as a secondary signal:
 
-- target utilization: `keda.cpu.targetUtilization`
-- purpose: support scale-out during CPU-heavy scheduling computation
+- trigger type: `cpu`
+- metric type: `Utilization`
+- target: `keda.cpu.targetUtilization`, currently `"70"`
+- reason: scheduling can be compute-heavy even before Kafka lag becomes large
 
-### Add Gthulhu Signal: Pod Scheduling Pressure
+### Complementary Signal: Gthulhu Scheduling Pressure
 
-The first phase should use `involuntary_ctx_switches` and `wait_time`, instead of adding too many metrics at once.
+Use Gthulhu as a complementary signal, not a replacement for Kafka lag.
 
-Recommended Prometheus query:
+Recommended first trigger query:
 
 ```promql
-sum(
+avg(
   rate(gthulhu_pod_involuntary_ctx_switches_total{
     namespace="woms",
     pod_name=~"woms-woms-worker-.*"
@@ -126,10 +153,12 @@ sum(
 )
 ```
 
-If the Gthulhu environment is already collecting `wait_time` reliably, add:
+This query returns a scalar average involuntary context-switch rate per worker pod. For an HPA trigger, an average per pod is safer than a raw cluster-wide sum because a sum can rise as replicas increase and can create positive feedback.
+
+Dashboard-only calibration query for run-queue wait:
 
 ```promql
-sum(
+avg(
   rate(gthulhu_pod_wait_time_nanoseconds_total{
     namespace="woms",
     pod_name=~"woms-woms-worker-.*"
@@ -137,18 +166,49 @@ sum(
 ) / 1000000000
 ```
 
-For the first implementation, use `involuntary_ctx_switches` as the KEDA prometheus trigger because it is easier to observe as a preemption pressure signal. Keep `wait_time` in dashboards and use it for later threshold calibration.
+Also chart these in Grafana before turning them into triggers:
 
-## Helm / Kubernetes Design Draft
+```promql
+avg(rate(gthulhu_pod_cpu_migrations_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
+avg(rate(gthulhu_pod_numa_migrations_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
+max by (pod_name) (rate(gthulhu_pod_involuntary_ctx_switches_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
+```
 
-### Gthulhu PodSchedulingMetrics
+Thresholds must be calibrated on the actual cluster. Do not copy thresholds from WOMS directly to SD-Core.
 
-The current WOMS worker pod has these labels:
+## Required WOMS Helm Change
 
-- `app.kubernetes.io/instance: <release>`
-- `app.kubernetes.io/component: scheduler-worker`
+The current WOMS chart does not yet have `keda.gthulhu`. Add an optional values block:
 
-PoC resource draft:
+```yaml
+keda:
+  gthulhu:
+    enabled: false
+    prometheusServerAddress: http://prometheus-kube-prometheus-prometheus.monitoring:9090
+    metricName: woms_worker_gthulhu_involuntary_ctx_switches_rate
+    threshold: "20"
+    query: |
+      avg(rate(gthulhu_pod_involuntary_ctx_switches_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
+```
+
+Then extend `deploy/helm/woms/templates/keda-scaledobject.yaml` inside the existing `triggers:` list:
+
+```yaml
+{{- if .Values.keda.gthulhu.enabled }}
+- type: prometheus
+  metadata:
+    serverAddress: {{ .Values.keda.gthulhu.prometheusServerAddress | quote }}
+    metricName: {{ .Values.keda.gthulhu.metricName | quote }}
+    query: {{ tpl .Values.keda.gthulhu.query . | quote }}
+    threshold: {{ .Values.keda.gthulhu.threshold | quote }}
+{{- end }}
+```
+
+After that change, update `deploy/helm/woms/chart-static.test.mjs` and `scripts/verify-hpa-render.sh` so CI can prove the optional prometheus trigger renders only when enabled.
+
+## Gthulhu PodSchedulingMetrics Draft
+
+Use a namespace-scoped PSM for the first PoC. The label selectors document intent, but current Gthulhu develop behavior should be assumed namespace-only until label matching is fixed.
 
 ```yaml
 apiVersion: gthulhu.io/v1alpha1
@@ -175,144 +235,114 @@ spec:
     cpuMigrations: true
 ```
 
-Implementation note: `/home/ubuntu/Gthulhu/monitor/crdwatcher/watcher.go` currently notes that `PodRef` does not carry pod labels, and `psmMatchesPod` does not yet enforce label selectors precisely. WOMS has two options:
-
-1. **Short-term PoC**: isolate the test in namespace `woms`, then filter worker pods precisely in Prometheus with `pod_name=~"woms-woms-worker-.*"`.
-2. **Before production integration**: extend Gthulhu `PodRef` and the informer path to include pod labels, then enforce `labelSelectors` accurately.
-
-### Add A Prometheus Trigger To The WOMS KEDA ScaledObject
-
-Add an optional trigger to `deploy/helm/woms/templates/keda-scaledobject.yaml`, with a new `keda.gthulhu` block in `values.yaml`.
-
-Example values:
-
-```yaml
-keda:
-  gthulhu:
-    enabled: true
-    prometheusServerAddress: http://prometheus-kube-prometheus-prometheus.monitoring:9090
-    metricName: woms_worker_gthulhu_involuntary_ctx_switches_rate
-    threshold: "20"
-    query: |
-      sum(rate(gthulhu_pod_involuntary_ctx_switches_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
-```
-
-Example trigger:
-
-```yaml
-- type: prometheus
-  metadata:
-    serverAddress: {{ .Values.keda.gthulhu.prometheusServerAddress | quote }}
-    metricName: {{ .Values.keda.gthulhu.metricName | quote }}
-    query: {{ .Values.keda.gthulhu.query | quote }}
-    threshold: {{ .Values.keda.gthulhu.threshold | quote }}
-```
-
-## SD-Core SMF/UPF Extension Path
-
-After the WOMS PoC succeeds, split the 5GC extension into two paths:
-
-1. **SMF HPA**
-   SMF is a control-plane NF. Its pressure usually comes from PDU session establishment, modification, release, and PFCP/N4 control-plane interaction. Gthulhu can observe whether SMF pods suffer scheduling latency or preemption, then combine that with request rate, session count, or queue depth to drive HPA.
-
-2. **UPF HPA**
-   UPF is a data-plane NF and is more sensitive to CPU locality, preemption, migration, NUMA placement, and packet-processing jitter. Gthulhu metrics such as `cpu_migrations`, `numa_migrations`, `wait_time`, and `involuntary_ctx_switches` are closer to UPF data-plane pressure than generic CPU utilization. However, UPF scale-out also requires traffic steering, PFCP session state, PDR/FAR/QER installation, and datapath consistency. It cannot be solved by replica count alone.
-
-WOMS is valuable because it validates the autoscaling feedback loop before the 5GC stateful datapath problem is introduced.
+Do not enable `spec.scaling` for this WOMS target during the PoC. Keep scaling in the WOMS `ScaledObject`.
 
 ## PoC Phases
 
-### Phase 1: Observe Without Changing HPA Decisions
+### Phase 1: Observe Only
 
-- Deploy Gthulhu.
-- Deploy or connect Prometheus, and confirm it can scrape Gthulhu `/metrics`.
-- Deploy or connect Grafana, and create a WOMS worker / Gthulhu scheduling dashboard.
+- Deploy or connect Prometheus/Grafana.
+- Deploy Gthulhu from the `develop` branch or the matching image/chart produced from it.
+- Confirm Gthulhu monitor `/metrics` exposes pod metrics.
 - Create the WOMS `PodSchedulingMetrics`.
-- Scrape Gthulhu metrics with Prometheus.
-- Verify worker pod metrics with Grafana or Prometheus queries.
-- Run the WOMS HPA demo with 200 lines, 1,000 orders, and 200 jobs, then check whether Kafka lag and Gthulhu metrics rise together.
+- Run the existing WOMS HPA peak demo from the web UI.
+- Confirm Kafka lag and Gthulhu worker metrics move during the same workload.
 
-### Phase 2: Add The Gthulhu Prometheus Trigger To KEDA
+### Phase 2: Add The WOMS Prometheus Trigger
 
-- Add `keda.gthulhu.enabled` to the WOMS Helm chart.
-- Keep the Kafka lag and CPU triggers.
-- Add the prometheus trigger.
-- Start with a conservative threshold so Gthulhu does not over-scale too early.
-- Verify HPA events show scale-up from the external metric.
+- Add the optional `keda.gthulhu` values and trigger template to WOMS.
+- Render the chart with `keda.gthulhu.enabled=true`.
+- Confirm the rendered `ScaledObject` still targets only `woms-woms-worker`.
+- Confirm the triggers are Kafka, CPU, and one Gthulhu prometheus trigger.
+- Start with a conservative threshold.
 
-### Phase 3: Calibrate Thresholds And Failure Policy
+### Phase 3: Calibrate
 
-- Test multiple job volumes.
-- Compare scale-up timing between "Kafka lag only" and "Kafka lag + Gthulhu".
-- Define behavior when Gthulhu or Prometheus is unavailable. Missing Gthulhu metrics must not break Kafka lag scaling.
-- Decide whether `wait_time` should become a trigger or remain dashboard-only.
+- Compare three cases: Kafka+CPU only, Kafka+CPU+Gthulhu observe-only, and Kafka+CPU+Gthulhu trigger enabled.
+- Test different `WORKER_MIN_JOB_DURATION_MS`, order volumes, and worker resource requests.
+- Check whether Gthulhu causes earlier scale-out only when worker pods show real scheduling pressure.
+- Confirm scale-down still follows the existing 120-second cooldown and stabilization behavior.
 
-### Phase 4: Generalize For SD-Core
+### Phase 4: Generalize Toward SD-Core
 
-- Turn metric query, threshold, target workload, namespace, and label selector into values.
-- Create SMF/UPF variants of `PodSchedulingMetrics` and KEDA prometheus trigger templates.
-- Add NUMA / CPU migration dashboards and alerts for UPF.
+- Turn namespace, pod selector, query, threshold, and target deployment into reusable values.
+- For SMF, combine Gthulhu scheduling pressure with control-plane request/session/PFCP queue signals.
+- For UPF, treat Gthulhu as a pressure signal only; UPF scale-out still needs traffic steering, PFCP state handling, and datapath consistency.
 
 ## Verification
 
-WOMS-side checks:
+WOMS static and unit checks:
 
 ```bash
 ./scripts/verify-hpa-render.sh
 go test ./...
-npm test
+npm run test:web
 ```
 
-Kubernetes-side checks:
+Render check after adding `keda.gthulhu`:
 
 ```bash
-kubectl get pods -n woms -l app.kubernetes.io/component=scheduler-worker
-kubectl get podschedulingmetrics -n woms
-kubectl get hpa -n woms
-kubectl describe hpa woms-woms-worker-hpa -n woms
-kubectl get scaledobject -n woms
+helm template woms ./deploy/helm/woms --dependency-update \
+  --namespace woms \
+  --set keda.gthulhu.enabled=true \
+  --set keda.gthulhu.prometheusServerAddress=http://prometheus-kube-prometheus-prometheus.monitoring:9090
 ```
 
-Prometheus queries:
+Kubernetes checks:
+
+```bash
+kubectl get deploy,pod,scaledobject,hpa -n woms
+kubectl get pods -n woms -l app.kubernetes.io/component=scheduler-worker
+kubectl describe scaledobject woms-woms-worker -n woms
+kubectl describe hpa woms-woms-worker-hpa -n woms
+kubectl get podschedulingmetrics -n woms
+```
+
+Prometheus checks:
 
 ```promql
-sum(rate(gthulhu_pod_involuntary_ctx_switches_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
-sum(rate(gthulhu_pod_wait_time_nanoseconds_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
+avg(rate(gthulhu_pod_involuntary_ctx_switches_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
+avg(rate(gthulhu_pod_wait_time_nanoseconds_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m])) / 1000000000
+avg(rate(gthulhu_pod_cpu_migrations_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
+avg(rate(gthulhu_pod_numa_migrations_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
 ```
 
-The Grafana dashboard should include at least:
+Grafana dashboard minimum panels:
 
-- Kafka lag: `woms.schedule.jobs` / `woms-scheduler-workers`
-- worker replicas: current / desired
-- HPA events or desired replica changes
-- Gthulhu worker pod `involuntary_ctx_switches` rate
-- Gthulhu worker pod `wait_time` rate
-- Gthulhu worker pod `cpu_migrations` / `numa_migrations` rate
+- Kafka lag for `woms.schedule.jobs` / `woms-scheduler-workers`.
+- Worker current replicas and desired replicas.
+- HPA events or desired replica changes.
+- Worker CPU utilization.
+- Gthulhu worker involuntary context-switch rate.
+- Gthulhu worker wait-time rate.
+- Gthulhu worker CPU migration and NUMA migration rates.
 
-Success criteria:
+## Success Criteria
 
-- Gthulhu can observe WOMS worker pod metrics.
-- Prometheus can scrape and query Gthulhu worker pod metrics.
-- Grafana can show the worker backlog, replicas, and Gthulhu scheduling pressure dashboard.
-- Kafka lag rises during the WOMS HPA demo.
-- Gthulhu scheduling pressure metrics change while workers are busy.
-- The KEDA `ScaledObject` contains Kafka, CPU, and Gthulhu prometheus triggers.
-- HPA can scale out `woms-woms-worker`, and scale-down is not more aggressive than the current cooldown behavior.
+- WOMS still scales workers from Kafka lag without Gthulhu enabled.
+- Gthulhu can observe WOMS worker pod metrics through Prometheus.
+- The optional Gthulhu prometheus trigger is part of the same WOMS `ScaledObject`, not a second scaler for the same deployment.
+- Missing Gthulhu/Prometheus data does not remove the Kafka lag path.
+- HPA scale-down remains no more aggressive than the current WOMS behavior.
+- Grafana can explain whether a scale-out came from backlog, CPU, or Gthulhu scheduling pressure.
 
-## Risks And Limits
+## Risks And Controls
 
-1. **Gthulhu label selectors may not be precise yet**
-   The current Gthulhu watcher does not store pod labels in `PodRef`, so production integration should either add label matching or filter precisely with `pod_name` in Prometheus.
+1. **Current Gthulhu label matching is not precise**
+   Treat `PodSchedulingMetrics` as namespace-scoped on develop commit `00fc41f`; use PromQL `pod_name` filtering for WOMS worker metrics until Gthulhu adds label-aware `PodRef` matching.
 
-2. **Thresholds require real calibration**
-   Absolute values for `involuntary_ctx_switches` and `wait_time` depend on kernel version, CPU topology, neighboring workloads, and worker resource requests. They cannot be copied directly to SD-Core.
+2. **Two HPAs for one worker deployment would conflict**
+   Do not enable Gthulhu chart example scaling or `PodSchedulingMetrics.spec.scaling` for `woms-woms-worker`. Add Gthulhu as a trigger inside WOMS' existing `ScaledObject`.
 
-3. **Do not let the Gthulhu trigger override Kafka lag**
-   Kafka lag remains the primary WOMS backlog signal. Gthulhu should complement it with pod scheduling pressure, not become the only scaling source.
+3. **Thresholds are environment-specific**
+   Gthulhu metric values depend on kernel version, CPU topology, node pressure, worker resource requests, and co-located workloads.
 
-4. **UPF cannot be solved by HPA alone**
-   UPF includes flow/session state and datapath routing. Gthulhu + KEDA can provide better pressure signals, but scale-out must still coordinate with the 5GC control plane and traffic steering.
+4. **Gthulhu is not a backlog signal**
+   Kafka lag remains the main queue-depth source. Gthulhu is for runtime scheduling evidence.
+
+5. **UPF scale-out is not solved by HPA alone**
+   Gthulhu can improve pressure detection, but UPF scaling also needs packet steering and 5GC session/datapath coordination.
 
 ## Recommendation
 
-WOMS should adopt a "Kafka lag primary, CPU secondary, Gthulhu scheduling pressure complementary" HPA design. The reason to use Gthulhu is that it exposes pod-level kernel scheduling information that Kubernetes/HPA cannot see natively, while still integrating through Prometheus and KEDA into the existing HPA loop. This makes WOMS a low-risk PoC and creates a shared architecture for future Gthulhu-backed SD-Core SMF/UPF autoscaling.
+Use the current WOMS Kafka+CPU KEDA/HPA path as the stable baseline. Add Gthulhu as one optional prometheus trigger in the existing WOMS `ScaledObject`, keep Grafana as a calibration requirement, and do not enable any separate Gthulhu-managed scaler for `woms-woms-worker`. The first usable trigger should be average worker-pod involuntary context-switch rate, with wait time and migration metrics kept in dashboards until real cluster thresholds are known.
