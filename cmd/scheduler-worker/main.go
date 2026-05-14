@@ -23,6 +23,18 @@ func main() {
 	databaseURL := env("DATABASE_URL", "")
 	minJobDuration := envDuration("WORKER_MIN_JOB_DURATION_MS", 0)
 	maxRetries := envInt("WORKER_MAX_RETRIES", 3)
+	backfillInterval := envDuration("WORKER_BACKFILL_INTERVAL_MS", 5*time.Second)
+	startOffsetLabel := strings.ToLower(strings.TrimSpace(env("WORKER_START_OFFSET", "latest")))
+	startOffset := kafka.LastOffset
+	switch startOffsetLabel {
+	case "earliest", "first", "oldest":
+		startOffset = kafka.FirstOffset
+	case "latest", "last", "newest", "":
+		startOffset = kafka.LastOffset
+	default:
+		log.Printf("invalid WORKER_START_OFFSET=%q, defaulting to latest", startOffsetLabel)
+		startOffset = kafka.LastOffset
+	}
 	var db *sql.DB
 	if databaseURL != "" {
 		var err error
@@ -34,6 +46,9 @@ func main() {
 			log.Fatalf("postgres ping failed: %v", err)
 		}
 		defer db.Close()
+		if err := backfillQueuedJobs(context.Background(), db, maxRetries); err != nil {
+			log.Printf("scheduler backfill failed: %v", err)
+		}
 	}
 
 	log.Printf("scheduler worker starting brokers=%s topic=%s group=%s minJobDuration=%s", brokers, topic, group, minJobDuration)
@@ -41,8 +56,23 @@ func main() {
 		Brokers: strings.Split(brokers, ","),
 		Topic:   topic,
 		GroupID: group,
+		// Ensure the consumer picks up topics/partitions created after startup.
+		WatchPartitionChanges:  true,
+		PartitionWatchInterval: 5 * time.Second,
+		StartOffset:            startOffset,
 	})
 	defer reader.Close()
+	if db != nil && backfillInterval > 0 {
+		go func() {
+			ticker := time.NewTicker(backfillInterval)
+			defer ticker.Stop()
+			for range ticker.C {
+				if err := backfillQueuedJobs(context.Background(), db, maxRetries); err != nil {
+					log.Printf("scheduler backfill failed: %v", err)
+				}
+			}
+		}()
+	}
 
 	for {
 		message, err := reader.FetchMessage(context.Background())
@@ -93,6 +123,9 @@ func processDBJob(ctx context.Context, db *sql.DB, payload []byte, maxRetries in
 		return err
 	}
 	if status == domain.JobCancelled {
+		return tx.Commit()
+	}
+	if status != domain.JobQueued {
 		return tx.Commit()
 	}
 	var attempt int
@@ -285,6 +318,92 @@ func persistPreviewAllocations(ctx context.Context, tx *sql.Tx, job domain.Sched
 	}
 	_, err := tx.ExecContext(ctx, "UPDATE production_lines SET schedule_revision = schedule_revision + 1 WHERE id = $1", job.LineID)
 	return err
+}
+
+func backfillQueuedJobs(ctx context.Context, db *sql.DB, maxRetries int) error {
+	const backfillBatchSize = 100
+
+	var (
+		lastCreatedAt time.Time
+		lastID        string
+		hasCursor     bool
+	)
+
+	for {
+		var (
+			rows *sql.Rows
+			err  error
+		)
+
+		if hasCursor {
+			rows, err = db.QueryContext(ctx, `
+				SELECT id, line_id, COALESCE(source, ''), COALESCE(preview_id, ''),
+				       COALESCE(request_hash, ''), line_revision, order_ids, created_at, updated_at
+				FROM schedule_jobs
+				WHERE status = 'queued'
+				  AND (created_at > $1 OR (created_at = $1 AND id > $2))
+				ORDER BY created_at, id
+				LIMIT $3
+			`, lastCreatedAt, lastID, backfillBatchSize)
+		} else {
+			rows, err = db.QueryContext(ctx, `
+				SELECT id, line_id, COALESCE(source, ''), COALESCE(preview_id, ''),
+				       COALESCE(request_hash, ''), line_revision, order_ids, created_at, updated_at
+				FROM schedule_jobs
+				WHERE status = 'queued'
+				ORDER BY created_at, id
+				LIMIT $1
+			`, backfillBatchSize)
+		}
+		if err != nil {
+			return err
+		}
+
+		batchCount := 0
+		for rows.Next() {
+			var job domain.ScheduleJob
+			var orderIDsJSON []byte
+			if err := rows.Scan(
+				&job.ID,
+				&job.LineID,
+				&job.Source,
+				&job.PreviewID,
+				&job.RequestHash,
+				&job.LineRevision,
+				&orderIDsJSON,
+				&job.CreatedAt,
+				&job.UpdatedAt,
+			); err != nil {
+				rows.Close()
+				return err
+			}
+			_ = json.Unmarshal(orderIDsJSON, &job.OrderIDs)
+			job.Status = domain.JobQueued
+			payload, err := json.Marshal(job)
+			if err != nil {
+				rows.Close()
+				return err
+			}
+			if err := processDBJob(ctx, db, payload, maxRetries); err != nil {
+				log.Printf("scheduler backfill job failed id=%s error=%v", job.ID, err)
+			}
+
+			lastCreatedAt = job.CreatedAt
+			lastID = job.ID
+			hasCursor = true
+			batchCount++
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if batchCount < backfillBatchSize {
+			return nil
+		}
+	}
 }
 
 type errStaleScheduleData struct{}
