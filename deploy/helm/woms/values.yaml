@@ -9,7 +9,7 @@ api:
     minAvailable: 1
   image:
     repository: woms-api
-    tag: v0.1.28
+    tag: v0.1.29
   jwtSecret: ""
   env:
     store: postgres
@@ -31,7 +31,7 @@ worker:
   replicaCount: 1
   image:
     repository: woms-scheduler-worker
-    tag: v0.1.28
+    tag: v0.1.29
   env:
     databaseUrl: postgres://woms:woms@postgres:5432/woms?sslmode=disable
     minJobDurationMs: "0"
@@ -50,7 +50,7 @@ web:
     minAvailable: 1
   image:
     repository: woms-web
-    tag: v0.1.28
+    tag: v0.1.29
   resources:
     requests:
       cpu: 50m
@@ -101,7 +101,7 @@ postgresql:
   image:
     registry: docker.io
     repository: bitnamilegacy/postgresql
-    tag: 16.4.0-debian-12-r14
+    tag: v0.1.29
   auth:
     username: woms
     password: woms
@@ -121,7 +121,7 @@ redis:
   image:
     registry: docker.io
     repository: bitnamilegacy/redis
-    tag: 7.2.5-debian-12-r4
+    tag: v0.1.29
   architecture: standalone
   auth:
     enabled: false
@@ -140,7 +140,7 @@ kafka:
   image:
     registry: docker.io
     repository: bitnamilegacy/kafka
-    tag: 3.7.1-debian-12-r4
+    tag: v0.1.29
   controller:
     replicaCount: 1
     extraConfigYaml:
@@ -170,7 +170,7 @@ kafkaTopic:
   enabled: true
   image:
     repository: docker.io/bitnamilegacy/kafka
-    tag: 3.7.1-debian-12-r4
+    tag: v0.1.29
     pullPolicy: IfNotPresent
   activeDeadlineSeconds: 420
   wait:
