@@ -11,6 +11,7 @@ import {
   groupAllocationsByDate,
   isFutureDateKey,
   lineScopedOrders,
+  mergePreviewCalendarAllocations,
   matchesOrder,
   monthGrid,
   priorityLabel,
@@ -209,6 +210,22 @@ test("groupAllocationsByDate groups calendar allocations by ISO date", () => {
   ]);
   assert.deepEqual(groups["2026-05-02"].map((item) => item.orderId), ["ORD-1", "ORD-2"]);
   assert.deepEqual(groups["2026-05-03"].map((item) => item.orderId), ["ORD-3"]);
+});
+
+test("mergePreviewCalendarAllocations replaces touched orders with preview entries", () => {
+  const calendar = [
+    { orderId: "ORD-1", date: "2026-05-15", quantity: 2500, status: "已排程" },
+    { orderId: "ORD-2", date: "2026-05-15", quantity: 2500, status: "已排程" },
+  ];
+  const preview = [
+    { orderId: "ORD-1", date: "2026-05-16", quantity: 2500 },
+    { orderId: "ORD-3", date: "2026-05-15", quantity: 2500 },
+  ];
+  const merged = mergePreviewCalendarAllocations(preview, calendar, ["ORD-2"]);
+
+  assert.equal(merged.some((item) => item.orderId === "ORD-1" && item.date === "2026-05-15"), false);
+  assert.equal(merged.some((item) => item.orderId === "ORD-2"), false);
+  assert.equal(merged.filter((item) => item.preview).length, 2);
 });
 
 test("sales due date helpers allow only tomorrow or later", () => {

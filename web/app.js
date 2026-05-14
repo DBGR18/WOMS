@@ -8,6 +8,7 @@ import {
   exactFilterOrders,
   groupAllocationsByDate,
   lineScopedOrders,
+  mergePreviewCalendarAllocations,
   monthGrid,
   priorityClass,
   priorityLabel,
@@ -1003,8 +1004,10 @@ function renderCalendar() {
   const monthIndex = state.calendarDate.getUTCMonth();
   document.getElementById("calendar-title").textContent = `${year}-${String(monthIndex + 1).padStart(2, "0")}`;
 
-  const previewAllocations = state.preview?.allocations?.map((allocation) => ({ ...allocation, preview: true })) ?? [];
-  const groups = groupAllocationsByDate([...state.calendarAllocations, ...previewAllocations]);
+  const previewAllocations = state.preview?.allocations ?? [];
+  const resolutionOrderIds = state.preview?.request?.resolutionOrderIds ?? [];
+  const mergedAllocations = mergePreviewCalendarAllocations(previewAllocations, state.calendarAllocations, resolutionOrderIds);
+  const groups = groupAllocationsByDate(mergedAllocations);
   const grid = document.getElementById("calendar-grid");
   grid.innerHTML = "";
   for (const day of monthGrid(year, monthIndex)) {
@@ -1156,10 +1159,9 @@ function renderPreviewCalendar(allocations) {
   const previewMonth = firstPreviewDate(allocations) ?? state.calendarDate;
   const year = previewMonth.getUTCFullYear();
   const monthIndex = previewMonth.getUTCMonth();
-  const groups = groupAllocationsByDate([
-    ...state.calendarAllocations,
-    ...allocations.map((allocation) => ({ ...allocation, preview: true })),
-  ]);
+  const resolutionOrderIds = state.preview?.request?.resolutionOrderIds ?? [];
+  const mergedAllocations = mergePreviewCalendarAllocations(allocations, state.calendarAllocations, resolutionOrderIds);
+  const groups = groupAllocationsByDate(mergedAllocations);
   const grid = document.getElementById("preview-calendar-grid");
   grid.innerHTML = "";
   for (const day of monthGrid(year, monthIndex)) {

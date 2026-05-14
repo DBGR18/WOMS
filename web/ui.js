@@ -123,6 +123,28 @@ export function groupAllocationsByDate(allocations) {
 	}, {});
 }
 
+export function mergePreviewCalendarAllocations(previewAllocations, calendarAllocations, resolutionOrderIds = []) {
+  const normalize = (value) => String(value ?? "").trim().toLowerCase();
+  const previewOrderIds = new Set(
+    previewAllocations.map((allocation) => normalize(allocation.orderId ?? allocation.orderID)).filter(Boolean),
+  );
+  const resolutionIds = new Set(resolutionOrderIds.map(normalize).filter(Boolean));
+  const replacedOrderIds = new Set([...previewOrderIds, ...resolutionIds]);
+
+  const merged = [];
+  for (const allocation of calendarAllocations) {
+    const orderId = normalize(allocation.orderId ?? allocation.orderID);
+    if (!orderId || replacedOrderIds.has(orderId)) {
+      continue;
+    }
+    merged.push(allocation);
+  }
+  for (const allocation of previewAllocations) {
+    merged.push({ ...allocation, preview: true });
+  }
+  return merged;
+}
+
 export const unacceptableDueDateMessage = "無法被接受的交期";
 export const defaultTimezone = "Asia/Taipei";
 
