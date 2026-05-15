@@ -37,7 +37,8 @@ test("Helm values keep async scheduling and HPA demo defaults wired", () => {
   assert.match(values, /metricName:\s+woms_worker_gthulhu_involuntary_ctx_switches_rate/);
   assert.match(values, /threshold:\s+"20"/);
   assert.match(values, /query:\s+\|-/);
-  assert.match(values, /gthulhu_pod_involuntary_ctx_switches_total\{exported_namespace="woms",pod_name=~"woms-woms-worker-\.\*"\}/);
+  assert.match(values, /gthulhu_pod_involuntary_ctx_switches_total\{exported_namespace="\{\{ \.Release\.Namespace \}\}"/);
+  assert.match(values, /pod_name=~"\{\{ include "woms\.fullname" \. \}\}-worker-\.\*"/);
 });
 
 test("Helm chart deploys required platform dependencies by default", () => {

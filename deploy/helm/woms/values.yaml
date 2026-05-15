@@ -100,7 +100,7 @@ keda:
     metricName: woms_worker_gthulhu_involuntary_ctx_switches_rate
     threshold: "20"
     query: |-
-      avg(rate(gthulhu_pod_involuntary_ctx_switches_total{exported_namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
+      avg(rate(gthulhu_pod_involuntary_ctx_switches_total{exported_namespace="{{ .Release.Namespace }}",pod_name=~"{{ include "woms.fullname" . }}-worker-.*"}[2m]))
 
 postgresql:
   enabled: true

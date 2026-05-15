@@ -2,6 +2,7 @@
 set -eu
 
 RELEASE="${RELEASE:-woms}"
+NAMESPACE="${NAMESPACE:-woms}"
 CHART="${CHART:-./deploy/helm/woms}"
 RENDERED_MANIFEST="${RENDERED_MANIFEST:-}"
 GTHULHU_ENABLED="${GTHULHU_ENABLED:-false}"
@@ -13,9 +14,9 @@ else
   trap 'rm -f "$rendered"' EXIT
 
   if [ "$GTHULHU_ENABLED" = "true" ]; then
-    helm template "$RELEASE" "$CHART" --dependency-update --set keda.gthulhu.enabled=true >"$rendered"
+    helm template "$RELEASE" "$CHART" --dependency-update --namespace "$NAMESPACE" --set keda.gthulhu.enabled=true >"$rendered"
   else
-    helm template "$RELEASE" "$CHART" --dependency-update >"$rendered"
+    helm template "$RELEASE" "$CHART" --dependency-update --namespace "$NAMESPACE" >"$rendered"
   fi
 fi
 
@@ -39,7 +40,8 @@ if [ "$GTHULHU_ENABLED" = "true" ]; then
   [ "$prometheus_triggers" -eq 1 ]
   [ "$gthulhu_metrics" -eq 1 ]
   grep -q 'serverAddress: "http://monitoring-kube-prometheus-prometheus.monitoring:9090"' "$rendered"
-  grep -Fq 'query: "avg(rate(gthulhu_pod_involuntary_ctx_switches_total{exported_namespace=\"woms\",pod_name=~\"woms-woms-worker-.*\"}[2m]))"' "$rendered"
+  expected_query="query: \"avg(rate(gthulhu_pod_involuntary_ctx_switches_total{exported_namespace=\\\"${NAMESPACE}\\\",pod_name=~\\\"${RELEASE}-woms-worker-.*\\\"}[2m]))\""
+  grep -Fq "$expected_query" "$rendered"
   grep -q 'threshold: "20"' "$rendered"
 else
   [ "$prometheus_triggers" -eq 0 ]
