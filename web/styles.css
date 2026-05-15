@@ -34,7 +34,7 @@ body {
   padding: 24px;
 }
 
-.login-page > div,
+.login-page>div,
 .login-page .login-bar {
   width: min(420px, calc(100vw - 48px));
 }
@@ -967,12 +967,12 @@ button.calendar-item:focus-visible {
   gap: 16px;
 }
 
-.preview-page-grid > section,
-.preview-page-grid > aside {
+.preview-page-grid>section,
+.preview-page-grid>aside {
   min-width: 0;
 }
 
-.preview-page-grid > section {
+.preview-page-grid>section {
   overflow-x: auto;
 }
 
@@ -982,7 +982,7 @@ button.calendar-item:focus-visible {
   overflow: auto;
 }
 
-.preview-page-grid > aside .preview-list {
+.preview-page-grid>aside .preview-list {
   max-height: 68vh;
 }
 
@@ -1055,6 +1055,7 @@ button.calendar-item:focus-visible {
 }
 
 @media (max-width: 980px) {
+
   .app-header,
   .layout {
     grid-template-columns: 1fr;
