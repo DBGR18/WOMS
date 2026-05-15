@@ -6,9 +6,7 @@ metadata:
     {{- include "woms.labels" . | nindent 4 }}
     app.kubernetes.io/component: scheduler-worker
 spec:
-  {{- if .Values.keda.enabled }}
-  replicas: {{ .Values.keda.minReplicaCount }}
-  {{- else }}
+  {{- if not .Values.keda.enabled }}
   replicas: {{ .Values.worker.replicaCount }}
   {{- end }}
   selector:

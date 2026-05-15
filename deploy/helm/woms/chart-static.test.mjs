@@ -141,9 +141,7 @@ test("API and worker deployments expose PostgreSQL, Kafka, and retry env", () =>
   assert.match(workerDeployment, /name:\s+DATABASE_URL/);
   assert.match(workerDeployment, /name:\s+WORKER_MIN_JOB_DURATION_MS/);
   assert.match(workerDeployment, /name:\s+WORKER_MAX_RETRIES/);
-  assert.match(workerDeployment, /if \.Values\.keda\.enabled/);
-  assert.match(workerDeployment, /replicas:\s+\{\{ \.Values\.keda\.minReplicaCount \}\}/);
-  assert.match(workerDeployment, /else/);
+  assert.match(workerDeployment, /if not \.Values\.keda\.enabled/);
   assert.match(workerDeployment, /replicas:\s+\{\{ \.Values\.worker\.replicaCount \}\}/);
 });
 
