@@ -22,6 +22,8 @@
 
 WOMS is a wafer order management and scheduling system built in its final deployment shape. Sales users create and track orders, scheduler engineers manage production-line schedules and daily production confirmations, and Kafka, Redis, KEDA, and Kubernetes support async rescheduling and scaling.
 
+In practical terms, WOMS accepts wafer orders, turns scheduling requests into asynchronous jobs, locks each production line while a worker computes allocations, stores the resulting calendar capacity in PostgreSQL, and records operational decisions in audit history. The repository is intentionally deployable as a real service, not only as a local prototype.
+
 ## Architecture
 
 ```mermaid
@@ -36,8 +38,19 @@ flowchart LR
   Kafka --> Worker[Go Scheduler Worker]
   Worker --> Redis
   Worker --> DB
-  KEDA[KEDA ScaledObject] --> Worker
+  Gthulhu[Gthulhu Monitor Optional] -. observes pod scheduling .-> Worker
+  Gthulhu -. pod metrics .-> Prometheus[(Prometheus Optional)]
+  Prometheus -. optional trigger .-> KEDA
+  KEDA[KEDA ScaledObject Kafka + CPU + optional Prometheus] --> Worker
 ```
+
+### Request And Scaling Flow
+
+1. Users access the static web UI through NGINX Ingress or a forwarded local port.
+2. The web UI calls the Go API. The API validates JWT/RBAC, reads and writes PostgreSQL, uses Redis for scheduling locks, and publishes schedule jobs to Kafka.
+3. Scheduler workers consume `woms.schedule.jobs` as the `woms-scheduler-workers` consumer group, compute deterministic allocations, update PostgreSQL, and write audit records.
+4. KEDA scales the worker deployment from the existing WOMS `ScaledObject`. Kafka lag is the primary trigger, CPU utilization is the secondary trigger, and Gthulhu can optionally add one Prometheus trigger for pod scheduling pressure.
+5. Gthulhu is not deployed by the WOMS chart. When enabled, a separate Gthulhu deployment observes worker pods, Prometheus scrapes its metrics, and WOMS reads the Prometheus query through KEDA.
 
 ### Deployable Units
 
@@ -45,8 +58,9 @@ flowchart LR
 - `api`: Go REST API for JWT, RBAC, orders, schedule preview, schedule jobs, production confirmation, and audit logs.
 - `scheduler-worker`: Go worker, prepared for Kafka consumer scheduling jobs.
 - `deploy/helm/woms`: Kubernetes Helm chart for API, worker, web, Ingress, and KEDA.
+- Optional Gthulhu integration: Gthulhu and Prometheus stay outside the WOMS chart. When `keda.gthulhu.enabled=true`, WOMS adds one Prometheus trigger to the existing worker `ScaledObject`.
 
-## Prerequirements
+## Prerequisites
 
 Install these tools first:
 
@@ -60,6 +74,7 @@ Install these tools first:
 - NGINX Ingress Controller
 - KEDA
 - metrics-server, required for CPU autoscaling verification
+- Optional for Gthulhu scheduling-pressure autoscaling: Gthulhu monitor and a Prometheus stack that scrapes it
 
 Check your tools:
 
@@ -178,7 +193,7 @@ Make sure the cluster has KEDA and metrics-server installed first. NGINX Ingress
 
 A clean VM deployment should have two layers:
 
-1. Platform setup: Kubernetes, metrics-server, and KEDA.
+1. Platform setup: Kubernetes, metrics-server, and KEDA. For the optional Gthulhu trigger, also install Gthulhu and Prometheus first.
 2. WOMS deployment: Helm installs the API, web, scheduler worker, Services, optional Ingress, KEDA ScaledObject, and the PostgreSQL, Redis, and Kafka chart dependencies.
 
 Users should not manually patch the web deployment, create Kafka topics, or tune topic partitions. Those operational details must be handled by the image, Helm chart, or platform bootstrap.
@@ -284,6 +299,8 @@ NAMESPACE=woms ./scripts/verify-k8s.sh
 HPA does not create pods named `hpa-*`. It is an autoscaling resource that changes `Deployment/woms-woms-worker` replicas. A successful demo shows multiple `woms-woms-worker-*` pods, and `kubectl describe hpa woms-woms-worker-hpa -n woms` shows `SuccessfulRescale` events with the external metric above target.
 
 The chart also includes an optional Gthulhu Prometheus trigger under `keda.gthulhu`, disabled by default. When it is explicitly enabled after Gthulhu and Prometheus are installed, it is rendered into the same worker `ScaledObject` as the Kafka and CPU triggers instead of creating a second scaler for `woms-woms-worker`. The default query uses `exported_namespace="woms"` because the kube-prometheus scrape target owns the `namespace` label and preserves Gthulhu's original pod namespace label as `exported_namespace`.
+
+Before changing the Gthulhu branch or image used with WOMS, follow the [Gthulhu and WOMS deployment alignment guide](docs/gthulhu-woms-deployment.en.md). The validated WOMS PoC baseline is Gthulhu `d11nn/feat/woms-poc`; any newer upstream image must be rebuilt and revalidated before it can be treated as equivalent.
 
 ### API And Web High Availability Demo
 

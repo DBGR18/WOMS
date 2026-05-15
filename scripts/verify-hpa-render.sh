@@ -33,14 +33,17 @@ grep -q 'lagThreshold: "10"' "$rendered"
 grep -q "type: cpu" "$rendered"
 grep -q "metricType: Utilization" "$rendered"
 grep -q 'value: "70"' "$rendered"
+prometheus_triggers="$(grep -c "type: prometheus" "$rendered" || true)"
+gthulhu_metrics="$(grep -c 'metricName: "woms_worker_gthulhu_involuntary_ctx_switches_rate"' "$rendered" || true)"
 if [ "$GTHULHU_ENABLED" = "true" ]; then
-  grep -q "type: prometheus" "$rendered"
+  [ "$prometheus_triggers" -eq 1 ]
+  [ "$gthulhu_metrics" -eq 1 ]
   grep -q 'serverAddress: "http://monitoring-kube-prometheus-prometheus.monitoring:9090"' "$rendered"
-  grep -q 'metricName: "woms_worker_gthulhu_involuntary_ctx_switches_rate"' "$rendered"
-  grep -Fq 'gthulhu_pod_involuntary_ctx_switches_total{exported_namespace=\"woms\",pod_name=~\"woms-woms-worker-.*\"}' "$rendered"
+  grep -Fq 'query: "avg(rate(gthulhu_pod_involuntary_ctx_switches_total{exported_namespace=\"woms\",pod_name=~\"woms-woms-worker-.*\"}[2m]))"' "$rendered"
   grep -q 'threshold: "20"' "$rendered"
 else
-  ! grep -q "woms_worker_gthulhu_involuntary_ctx_switches_rate" "$rendered"
+  [ "$prometheus_triggers" -eq 0 ]
+  [ "$gthulhu_metrics" -eq 0 ]
 fi
 grep -q "scaleUp:" "$rendered"
 grep -q "stabilizationWindowSeconds: 0" "$rendered"

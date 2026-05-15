@@ -36,6 +36,7 @@ test("Helm values keep async scheduling and HPA demo defaults wired", () => {
   assert.match(values, /prometheusServerAddress:\s+"http:\/\/monitoring-kube-prometheus-prometheus\.monitoring:9090"/);
   assert.match(values, /metricName:\s+woms_worker_gthulhu_involuntary_ctx_switches_rate/);
   assert.match(values, /threshold:\s+"20"/);
+  assert.match(values, /query:\s+\|-/);
   assert.match(values, /gthulhu_pod_involuntary_ctx_switches_total\{exported_namespace="woms",pod_name=~"woms-woms-worker-\.\*"\}/);
 });
 
@@ -139,7 +140,9 @@ test("API and worker deployments expose PostgreSQL, Kafka, and retry env", () =>
   assert.match(workerDeployment, /name:\s+DATABASE_URL/);
   assert.match(workerDeployment, /name:\s+WORKER_MIN_JOB_DURATION_MS/);
   assert.match(workerDeployment, /name:\s+WORKER_MAX_RETRIES/);
-  assert.match(workerDeployment, /if not \.Values\.keda\.enabled/);
+  assert.match(workerDeployment, /if \.Values\.keda\.enabled/);
+  assert.match(workerDeployment, /replicas:\s+\{\{ \.Values\.keda\.minReplicaCount \}\}/);
+  assert.match(workerDeployment, /else/);
   assert.match(workerDeployment, /replicas:\s+\{\{ \.Values\.worker\.replicaCount \}\}/);
 });
 

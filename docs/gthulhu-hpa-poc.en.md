@@ -11,6 +11,8 @@ git pull origin develop
 
 Git reported `Already up to date.`
 
+2026-05-15 update: the WOMS Phase 0-3 validation baseline was `d11nn/feat/woms-poc` at `f71f78a feat: add monitor pod index refresh`. This branch is `0 behind / 2 ahead` of upstream `main`; compared with latest upstream `develop`, it is `3 behind / 1 ahead` because upstream `develop` has moved to `6984d82`. Before switching to latest upstream `develop`, follow `docs/gthulhu-woms-deployment.en.md` to realign the branch/image and rerun validation; do not treat a floating `develop` tag as equivalent to the validated environment.
+
 The current WOMS architecture is no longer only a deployment skeleton. The Helm chart deploys:
 
 - Go API deployment `woms-woms-api`, default `2` replicas, JWT/RBAC, PostgreSQL store, Redis address, Kafka publisher, readiness/liveness probes, and a PDB `woms-woms-api` with `minAvailable: 1`.

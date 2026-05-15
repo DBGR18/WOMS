@@ -11,6 +11,8 @@ git pull origin develop
 
 Git 回覆 `Already up to date.`
 
+2026-05-15 更新：當初 WOMS Phase 0-3 實測基準是 `d11nn/feat/woms-poc` 的 `f71f78a feat: add monitor pod index refresh`。此 branch 相對 upstream `main` 是 `0 behind / 2 ahead`；若改和最新 upstream `develop` 比，則是 `3 behind / 1 ahead`，因為 upstream `develop` 已前進到 `6984d82`。若要改用最新 upstream `develop`，請先依照 `docs/gthulhu-woms-deployment.zh-TW.md` 重新對齊 branch/image 並重跑驗證；不要把 floating `develop` tag 直接視為等同於已驗證環境。
+
 目前 WOMS 架構已經不是單純 deployment skeleton。Helm chart 會部署：
 
 - Go API deployment `woms-woms-api`，預設 `2` replicas，包含 JWT/RBAC、PostgreSQL store、Redis address、Kafka publisher、readiness/liveness probes，以及 `minAvailable: 1` 的 PDB `woms-woms-api`。
