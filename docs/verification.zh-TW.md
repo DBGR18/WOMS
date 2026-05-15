@@ -147,7 +147,55 @@ kubectl describe pdb woms-woms-web -n woms
 - API 與 web PDB 都要求 `minAvailable: 1`。
 - 在多節點 cluster 發生 voluntary disruption 時，至少保留一個 API pod 與一個 web pod 可用。
 
-## 8. Redis Lock 驗證
+## 8. Gthulhu HPA Demo 驗證
+
+前置條件：
+
+- MicroK8s 已啟用 `registry`、`rbac`、KEDA、metrics-server。
+- Gthulhu monitor-only 已部署並可被 Prometheus scrape。
+- WOMS `ScaledObject/woms-woms-worker` 已啟用第三個 Gthulhu Prometheus trigger。
+- Prometheus query 使用 `exported_namespace="woms"`，不是 `namespace="woms"`。
+
+確認 trigger wiring：
+
+```bash
+kubectl get scaledobject woms-woms-worker -n woms -o yaml
+kubectl describe hpa woms-woms-worker-hpa -n woms
+```
+
+期望：
+
+- `ScaledObject` 有三個 triggers：Kafka、CPU、Prometheus。
+- Kafka 仍為 `lagThreshold: "10"`。
+- CPU 仍為 `value: "70"`。
+- Gthulhu scaler health 為 `Happy`。
+
+Proof demo 流程：
+
+1. 暫時把 `keda.gthulhu.threshold` 設為 `1`，不改 Kafka/CPU trigger。
+2. 執行「建立多產線排程尖峰」demo。
+3. 觀察 HPA events：
+
+```bash
+kubectl describe hpa woms-woms-worker-hpa -n woms
+```
+
+成功時會看到類似：
+
+```text
+New size: 4; reason: external metric s2-prometheus-woms_worker_gthulhu_involuntary_ctx_switches_rate above target
+New size: 8; reason: external metric s2-prometheus-woms_worker_gthulhu_involuntary_ctx_switches_rate above target
+```
+
+也可查 Prometheus：
+
+```promql
+avg(rate(gthulhu_pod_involuntary_ctx_switches_total{exported_namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
+```
+
+demo 後把 threshold 恢復保守值，例如 `20`。目前單節點 MicroK8s 實測中，threshold `5` 加 node-level CPU pressure 尚未穩定證明 realistic Gthulhu-only scale-out；重啟 Gthulhu monitor 後，worker-pod ephemeral pressure 可讓 Gthulhu metric 超過 `5`，但同時也會觸發 CPU scaler，因此 HPA reason 仍可能是 CPU。若要展示產品能力，請明確說明 `threshold=1` 是 proof/demo calibration，不是 production 建議值。
+
+## 9. Redis Lock 驗證
 
 同產線同時送兩個排程 job：
 
@@ -158,7 +206,7 @@ kubectl describe pdb woms-woms-web -n woms
 
 - 期望可並行處理。
 
-## 9. 完成功能標準
+## 10. 完成功能標準
 
 - 測試通過。
 - README zh-TW/en 更新。
@@ -166,7 +214,7 @@ kubectl describe pdb woms-woms-web -n woms
 - Docker/Helm/CI 設定同步。
 - `git add`、commit、push 完成。
 
-## 10. 前端 Smoke 驗證
+## 11. 前端 Smoke 驗證
 
 - 在 `http://127.0.0.1:8081` 登入。
 - 重新整理瀏覽器，確認 session 會恢復。

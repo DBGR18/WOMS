@@ -44,4 +44,12 @@ spec:
       metadata:
         value: {{ .Values.keda.cpu.targetUtilization | quote }}
     {{- end }}
+    {{- if .Values.keda.gthulhu.enabled }}
+    - type: prometheus
+      metadata:
+        serverAddress: {{ .Values.keda.gthulhu.prometheusServerAddress | quote }}
+        metricName: {{ .Values.keda.gthulhu.metricName | quote }}
+        query: {{ tpl .Values.keda.gthulhu.query . | quote }}
+        threshold: {{ .Values.keda.gthulhu.threshold | quote }}
+    {{- end }}
 {{- end }}

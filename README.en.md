@@ -283,6 +283,8 @@ NAMESPACE=woms ./scripts/verify-k8s.sh
 
 HPA does not create pods named `hpa-*`. It is an autoscaling resource that changes `Deployment/woms-woms-worker` replicas. A successful demo shows multiple `woms-woms-worker-*` pods, and `kubectl describe hpa woms-woms-worker-hpa -n woms` shows `SuccessfulRescale` events with the external metric above target.
 
+The chart also includes an optional Gthulhu Prometheus trigger under `keda.gthulhu`, disabled by default. When it is explicitly enabled after Gthulhu and Prometheus are installed, it is rendered into the same worker `ScaledObject` as the Kafka and CPU triggers instead of creating a second scaler for `woms-woms-worker`. The default query uses `exported_namespace="woms"` because the kube-prometheus scrape target owns the `namespace` label and preserves Gthulhu's original pod namespace label as `exported_namespace`.
+
 ### API And Web High Availability Demo
 
 The non-HPA high-availability scenario is voluntary disruption protection for the request path. API and web run with two replicas by default, and the Helm chart creates `PodDisruptionBudget` resources `woms-woms-api` and `woms-woms-web` with `minAvailable: 1`. During node drain, cluster upgrades, or other voluntary evictions, Kubernetes must keep at least one API pod and one web pod available.

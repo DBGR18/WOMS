@@ -286,6 +286,8 @@ NAMESPACE=woms ./scripts/verify-k8s.sh
 
 HPA 不會建立名為 `hpa-*` 的 pod。HPA 是 autoscaling resource，會調整 `Deployment/woms-woms-worker` 的 replicas；成功時會看到多個 `woms-woms-worker-*` pods。`kubectl describe hpa woms-woms-worker-hpa -n woms` 的 Events 會顯示 `SuccessfulRescale` 與 external metric above target。
 
+Chart 也提供可選的 Gthulhu Prometheus trigger，設定在 `keda.gthulhu`，預設關閉。只有在明確啟用且 Gthulhu、Prometheus 都已安裝後，這個 trigger 才會 render 到既有 worker `ScaledObject`，與 Kafka、CPU triggers 共用同一個 scaler，不會另外建立第二個 scaler 控制 `woms-woms-worker`。預設 query 使用 `exported_namespace="woms"`，因為 kube-prometheus scrape target 會佔用 `namespace` label，並把 Gthulhu 原本的 pod namespace label 保留為 `exported_namespace`。
+
 ### API And Web High Availability Demo
 
 HPA 之外的 high availability 情境是 request path 的 voluntary disruption protection。API 與 web 預設各有兩個 replicas，Helm chart 會建立 `PodDisruptionBudget` `woms-woms-api` 與 `woms-woms-web`，並設定 `minAvailable: 1`。當 node drain、cluster upgrade 或其他 voluntary eviction 發生時，Kubernetes 必須保留至少一個 API pod 與一個 web pod 可服務。
