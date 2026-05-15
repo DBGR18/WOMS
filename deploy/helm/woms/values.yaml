@@ -94,6 +94,13 @@ keda:
   cpu:
     enabled: true
     targetUtilization: "70"
+  gthulhu:
+    enabled: false
+    prometheusServerAddress: "http://monitoring-kube-prometheus-prometheus.monitoring:9090"
+    metricName: woms_worker_gthulhu_involuntary_ctx_switches_rate
+    threshold: "20"
+    query: |-
+      avg(rate(gthulhu_pod_involuntary_ctx_switches_total{exported_namespace="{{ .Release.Namespace }}",pod_name=~"{{ include "woms.fullname" . }}-worker-.*"}[2m]))
 
 postgresql:
   enabled: true
@@ -238,4 +245,3 @@ monitoring:
       limits:
         cpu: 250m
         memory: 256Mi
-

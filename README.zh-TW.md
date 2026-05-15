@@ -22,6 +22,8 @@
 
 WOMS 是以最終部署型態建置的晶圓訂單管理與排程系統。業務使用者建立與追蹤訂單，排程工程師管理產線排程與每日生產回報，Kafka、Redis、KEDA 與 Kubernetes 支援非同步重排與擴縮。
 
+實務上，WOMS 會接收晶圓訂單，把排程請求轉成非同步任務，在 worker 計算 allocation 時鎖定各 production line，把月曆產能結果保存到 PostgreSQL，並把營運決策寫入 audit history。這個 repository 的目標是能以真實服務型態部署，不只是本機 prototype。
+
 ## 架構
 
 ```mermaid
@@ -36,8 +38,19 @@ flowchart LR
   Kafka --> Worker[Go Scheduler Worker]
   Worker --> Redis
   Worker --> DB
-  KEDA[KEDA ScaledObject] --> Worker
+  Gthulhu[Gthulhu Monitor Optional] -. observes pod scheduling .-> Worker
+  Gthulhu -. pod metrics .-> Prometheus[(Prometheus Optional)]
+  Prometheus -. optional trigger .-> KEDA
+  KEDA[KEDA ScaledObject Kafka + CPU + optional Prometheus] --> Worker
 ```
+
+### Request 與 Scaling Flow
+
+1. 使用者透過 NGINX Ingress 或本機 forwarded port 存取 static web UI。
+2. Web UI 呼叫 Go API。API 會驗證 JWT/RBAC，讀寫 PostgreSQL，使用 Redis 做排程鎖，並把排程任務 publish 到 Kafka。
+3. Scheduler workers 以 `woms-scheduler-workers` consumer group 消費 `woms.schedule.jobs`，計算 deterministic allocations，更新 PostgreSQL，並寫入 audit records。
+4. KEDA 透過 WOMS 既有 `ScaledObject` 擴縮 worker deployment。Kafka lag 是主要 trigger，CPU utilization 是次要 trigger，Gthulhu 可選擇性新增一個 Prometheus trigger 來反映 pod scheduling pressure。
+5. Gthulhu 不由 WOMS chart 部署。啟用時，獨立的 Gthulhu deployment 觀察 worker pods，Prometheus scrape Gthulhu metrics，WOMS 再透過 KEDA 讀 Prometheus query。
 
 ### 可部署單元
 
@@ -45,6 +58,7 @@ flowchart LR
 - `api`：Go REST API，負責 JWT、RBAC、訂單、試排、排程任務、生產回報與稽核紀錄。
 - `scheduler-worker`：Go worker，作為 Kafka 排程任務 consumer 的部署單元。
 - `deploy/helm/woms`：部署 API、worker、web、Ingress 與 KEDA 的 Kubernetes Helm chart。
+- 可選 Gthulhu 整合：Gthulhu 與 Prometheus 不由 WOMS chart 部署；當 `keda.gthulhu.enabled=true` 時，WOMS 會把一個 Prometheus trigger 加進既有 worker `ScaledObject`。
 
 ## 前置需求
 
@@ -60,6 +74,7 @@ flowchart LR
 - NGINX Ingress Controller
 - KEDA
 - metrics-server，CPU autoscaling 驗證會用到
+- Gthulhu scheduling-pressure autoscaling 選配：Gthulhu monitor，以及可 scrape 它的 Prometheus stack
 
 檢查工具版本：
 
@@ -179,7 +194,7 @@ docker build -f Dockerfile.web -t woms-web:local .
 
 乾淨 VM 的使用者流程應該分成兩層：
 
-1. 平台準備：Kubernetes、metrics-server 與 KEDA。
+1. 平台準備：Kubernetes、metrics-server 與 KEDA。若要啟用 optional Gthulhu trigger，需先安裝 Gthulhu 與 Prometheus。
 2. WOMS 部署：使用 Helm 部署 API、web、scheduler-worker、Service、可選的 Ingress、KEDA ScaledObject，以及 PostgreSQL、Redis、Kafka chart dependencies。
 
 使用者不應手動 patch web deployment、手動建立 Kafka topic，或手動調整 topic partitions。這些都必須由 image、Helm chart 或平台 bootstrap 自動處理。
@@ -285,6 +300,10 @@ NAMESPACE=woms ./scripts/verify-k8s.sh
 `verify-k8s.sh` 會對應預設不啟用 Ingress 的 chart render。若使用 Ingress 部署，請先用 `--set ingress.enabled=true` 安裝，再執行 `INGRESS_ENABLED=true NAMESPACE=woms ./scripts/verify-k8s.sh`。
 
 HPA 不會建立名為 `hpa-*` 的 pod。HPA 是 autoscaling resource，會調整 `Deployment/woms-woms-worker` 的 replicas；成功時會看到多個 `woms-woms-worker-*` pods。`kubectl describe hpa woms-woms-worker-hpa -n woms` 的 Events 會顯示 `SuccessfulRescale` 與 external metric above target。
+
+Chart 也提供可選的 Gthulhu Prometheus trigger，設定在 `keda.gthulhu`，預設關閉。只有在明確啟用且 Gthulhu、Prometheus 都已安裝後，這個 trigger 才會 render 到既有 worker `ScaledObject`，與 Kafka、CPU triggers 共用同一個 scaler，不會另外建立第二個 scaler 控制 `woms-woms-worker`。預設 query 使用 `exported_namespace="woms"`，因為 kube-prometheus scrape target 會佔用 `namespace` label，並把 Gthulhu 原本的 pod namespace label 保留為 `exported_namespace`。
+
+變更 WOMS 搭配使用的 Gthulhu branch 或 image 前，請先依照 [Gthulhu 與 WOMS 部署對齊指南](docs/gthulhu-woms-deployment.zh-TW.md) 檢查。已驗證的 WOMS PoC 基準是 Gthulhu `d11nn/feat/woms-poc`；任何較新的 upstream image 都必須重新 build 並驗證後，才能視為等同環境。
 
 ### API And Web High Availability Demo
 

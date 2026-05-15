@@ -11,6 +11,8 @@ git pull origin develop
 
 Git 回覆 `Already up to date.`
 
+2026-05-15 更新：當初 WOMS Phase 0-3 實測基準是 `d11nn/feat/woms-poc` 的 `f71f78a feat: add monitor pod index refresh`。此 branch 相對 upstream `main` 是 `0 behind / 2 ahead`；若改和最新 upstream `develop` 比，則是 `3 behind / 1 ahead`，因為 upstream `develop` 已前進到 `6984d82`。若要改用最新 upstream `develop`，請先依照 `docs/gthulhu-woms-deployment.zh-TW.md` 重新對齊 branch/image 並重跑驗證；不要把 floating `develop` tag 直接視為等同於已驗證環境。
+
 目前 WOMS 架構已經不是單純 deployment skeleton。Helm chart 會部署：
 
 - Go API deployment `woms-woms-api`，預設 `2` replicas，包含 JWT/RBAC、PostgreSQL store、Redis address、Kafka publisher、readiness/liveness probes，以及 `minAvailable: 1` 的 PDB `woms-woms-api`。
@@ -172,7 +174,7 @@ Gthulhu 應作為補強訊號，不取代 Kafka lag。
 ```promql
 avg(
   rate(gthulhu_pod_involuntary_ctx_switches_total{
-    namespace="woms",
+    exported_namespace="woms",
     pod_name=~"woms-woms-worker-.*"
   }[2m])
 )
@@ -180,12 +182,14 @@ avg(
 
 這個 query 回傳 worker pod 平均 involuntary context-switch rate。對 HPA trigger 來說，per-pod average 比 raw cluster-wide sum 更安全，因為 sum 可能隨 replicas 增加而上升，造成正回饋。
 
+在本次 MicroK8s/kube-prometheus 實測中，Gthulhu `/metrics` endpoint 原始 label 是 `namespace="woms"`，但 Prometheus scrape target 本身已有 `namespace="gthulhu-system"`，因此 Prometheus 會把原始 pod namespace label 改成 `exported_namespace="woms"`。KEDA 查 Prometheus 時必須使用 `exported_namespace`。
+
 run-queue wait 建議先放 dashboard 校準：
 
 ```promql
 avg(
   rate(gthulhu_pod_wait_time_nanoseconds_total{
-    namespace="woms",
+    exported_namespace="woms",
     pod_name=~"woms-woms-worker-.*"
   }[2m])
 ) / 1000000000
@@ -194,29 +198,29 @@ avg(
 在變成 trigger 前，Grafana 也應先畫出：
 
 ```promql
-avg(rate(gthulhu_pod_cpu_migrations_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
-avg(rate(gthulhu_pod_numa_migrations_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
-max by (pod_name) (rate(gthulhu_pod_involuntary_ctx_switches_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
+avg(rate(gthulhu_pod_cpu_migrations_total{exported_namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
+avg(rate(gthulhu_pod_numa_migrations_total{exported_namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
+max by (pod_name) (rate(gthulhu_pod_involuntary_ctx_switches_total{exported_namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
 ```
 
 Threshold 必須在實際 WOMS cluster 校準。
 
 ## Gthulhu Preflight 通過後的 WOMS Helm 必要修改
 
-目前 WOMS chart 尚未有 `keda.gthulhu`。這個修改應該等 Gthulhu preflight 證明 Prometheus query 會回傳穩定 scalar 後才加入。建議 optional values block：
+Phase 0/Phase 1 實測已證明 Prometheus query 會回傳穩定 scalar；WOMS chart 現在提供預設關閉的 `keda.gthulhu` optional values block：
 
 ```yaml
 keda:
   gthulhu:
     enabled: false
-    prometheusServerAddress: http://prometheus-kube-prometheus-prometheus.monitoring:9090
+    prometheusServerAddress: http://monitoring-kube-prometheus-prometheus.monitoring:9090
     metricName: woms_worker_gthulhu_involuntary_ctx_switches_rate
     threshold: "20"
     query: |
-      avg(rate(gthulhu_pod_involuntary_ctx_switches_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
+      avg(rate(gthulhu_pod_involuntary_ctx_switches_total{exported_namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
 ```
 
-接著在 `deploy/helm/woms/templates/keda-scaledobject.yaml` 既有 `triggers:` list 裡新增：
+`deploy/helm/woms/templates/keda-scaledobject.yaml` 會在既有 `triggers:` list 裡條件式 render：
 
 ```yaml
 {{- if .Values.keda.gthulhu.enabled }}
@@ -229,7 +233,7 @@ keda:
 {{- end }}
 ```
 
-完成後要同步更新 `deploy/helm/woms/chart-static.test.mjs` 與 `scripts/verify-hpa-render.sh`，讓 CI 能驗證 optional prometheus trigger 只在啟用時 render。
+`deploy/helm/woms/chart-static.test.mjs` 與 `scripts/verify-hpa-render.sh` 已同步驗證 optional prometheus trigger 只在啟用時 render。
 
 如果未來 Gthulhu 提供已驗證的 controller，能完整擁有 WOMS worker scaler，包含 Kafka lag、CPU utilization、Gthulhu Prometheus metrics、HPA name、min/max replicas 與 scale behavior，那這個 Helm 修改可以改成把整個 worker `ScaledObject` 委派給該 controller。不要讓同一個 worker deployment 被兩個 charts 分別控制。
 
@@ -317,7 +321,7 @@ npm run test:web
 helm template woms ./deploy/helm/woms --dependency-update \
   --namespace woms \
   --set keda.gthulhu.enabled=true \
-  --set keda.gthulhu.prometheusServerAddress=http://prometheus-kube-prometheus-prometheus.monitoring:9090
+  --set keda.gthulhu.prometheusServerAddress=http://monitoring-kube-prometheus-prometheus.monitoring:9090
 ```
 
 Kubernetes checks：
@@ -333,10 +337,10 @@ kubectl get podschedulingmetrics -n woms
 Prometheus checks：
 
 ```promql
-avg(rate(gthulhu_pod_involuntary_ctx_switches_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
-avg(rate(gthulhu_pod_wait_time_nanoseconds_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m])) / 1000000000
-avg(rate(gthulhu_pod_cpu_migrations_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
-avg(rate(gthulhu_pod_numa_migrations_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
+avg(rate(gthulhu_pod_involuntary_ctx_switches_total{exported_namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
+avg(rate(gthulhu_pod_wait_time_nanoseconds_total{exported_namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m])) / 1000000000
+avg(rate(gthulhu_pod_cpu_migrations_total{exported_namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
+avg(rate(gthulhu_pod_numa_migrations_total{exported_namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
 ```
 
 Grafana dashboard 最少應包含：

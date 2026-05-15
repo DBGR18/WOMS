@@ -32,6 +32,13 @@ test("Helm values keep async scheduling and HPA demo defaults wired", () => {
   assert.match(values, /bootstrapServers:\s+"kafka\.\{\{ \.Release\.Namespace \}\}\.svc\.cluster\.local:9092"/);
   assert.match(values, /lagThreshold:\s+"10"/);
   assert.match(values, /targetUtilization:\s+"70"/);
+  assert.match(values, /gthulhu:[\s\S]*enabled:\s+false/);
+  assert.match(values, /prometheusServerAddress:\s+"http:\/\/monitoring-kube-prometheus-prometheus\.monitoring:9090"/);
+  assert.match(values, /metricName:\s+woms_worker_gthulhu_involuntary_ctx_switches_rate/);
+  assert.match(values, /threshold:\s+"20"/);
+  assert.match(values, /query:\s+\|-/);
+  assert.match(values, /gthulhu_pod_involuntary_ctx_switches_total\{exported_namespace="\{\{ \.Release\.Namespace \}\}"/);
+  assert.match(values, /pod_name=~"\{\{ include "woms\.fullname" \. \}\}-worker-\.\*"/);
 });
 
 test("Helm chart deploys required platform dependencies by default", () => {
@@ -72,6 +79,12 @@ test("KEDA ScaledObject template points at scheduler worker backlog", () => {
   assert.match(scaledObject, /lagThreshold:\s+\{\{ \.Values\.keda\.kafka\.lagThreshold \| quote \}\}/);
   assert.match(scaledObject, /type:\s+cpu/);
   assert.match(scaledObject, /metricType:\s+Utilization/);
+  assert.match(scaledObject, /if \.Values\.keda\.gthulhu\.enabled/);
+  assert.match(scaledObject, /type:\s+prometheus/);
+  assert.match(scaledObject, /serverAddress:\s+\{\{ \.Values\.keda\.gthulhu\.prometheusServerAddress \| quote \}\}/);
+  assert.match(scaledObject, /metricName:\s+\{\{ \.Values\.keda\.gthulhu\.metricName \| quote \}\}/);
+  assert.match(scaledObject, /query:\s+\{\{ tpl \.Values\.keda\.gthulhu\.query \. \| quote \}\}/);
+  assert.match(scaledObject, /threshold:\s+\{\{ \.Values\.keda\.gthulhu\.threshold \| quote \}\}/);
 });
 
 test("Kafka topic hook creates the scheduling topic with enough partitions for HPA", () => {
@@ -128,6 +141,8 @@ test("API and worker deployments expose PostgreSQL, Kafka, and retry env", () =>
   assert.match(workerDeployment, /name:\s+DATABASE_URL/);
   assert.match(workerDeployment, /name:\s+WORKER_MIN_JOB_DURATION_MS/);
   assert.match(workerDeployment, /name:\s+WORKER_MAX_RETRIES/);
+  assert.match(workerDeployment, /if not \.Values\.keda\.enabled/);
+  assert.match(workerDeployment, /replicas:\s+\{\{ \.Values\.worker\.replicaCount \}\}/);
 });
 
 test("Web deployment is runnable without manual securityContext patches", () => {

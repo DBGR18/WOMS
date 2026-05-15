@@ -11,6 +11,8 @@ git pull origin develop
 
 Git reported `Already up to date.`
 
+2026-05-15 update: the WOMS Phase 0-3 validation baseline was `d11nn/feat/woms-poc` at `f71f78a feat: add monitor pod index refresh`. This branch is `0 behind / 2 ahead` of upstream `main`; compared with latest upstream `develop`, it is `3 behind / 1 ahead` because upstream `develop` has moved to `6984d82`. Before switching to latest upstream `develop`, follow `docs/gthulhu-woms-deployment.en.md` to realign the branch/image and rerun validation; do not treat a floating `develop` tag as equivalent to the validated environment.
+
 The current WOMS architecture is no longer only a deployment skeleton. The Helm chart deploys:
 
 - Go API deployment `woms-woms-api`, default `2` replicas, JWT/RBAC, PostgreSQL store, Redis address, Kafka publisher, readiness/liveness probes, and a PDB `woms-woms-api` with `minAvailable: 1`.
@@ -172,7 +174,7 @@ Recommended first trigger query:
 ```promql
 avg(
   rate(gthulhu_pod_involuntary_ctx_switches_total{
-    namespace="woms",
+    exported_namespace="woms",
     pod_name=~"woms-woms-worker-.*"
   }[2m])
 )
@@ -180,12 +182,14 @@ avg(
 
 This query returns a scalar average involuntary context-switch rate per worker pod. For an HPA trigger, an average per pod is safer than a raw cluster-wide sum because a sum can rise as replicas increase and can create positive feedback.
 
+In the MicroK8s/kube-prometheus run, the raw Gthulhu `/metrics` endpoint exposes `namespace="woms"`, but the Prometheus scrape target already owns `namespace="gthulhu-system"`. Prometheus therefore preserves Gthulhu's original pod namespace label as `exported_namespace="woms"`. KEDA must use `exported_namespace` when querying Prometheus in this stack.
+
 Dashboard-only calibration query for run-queue wait:
 
 ```promql
 avg(
   rate(gthulhu_pod_wait_time_nanoseconds_total{
-    namespace="woms",
+    exported_namespace="woms",
     pod_name=~"woms-woms-worker-.*"
   }[2m])
 ) / 1000000000
@@ -194,29 +198,29 @@ avg(
 Also chart these in Grafana before turning them into triggers:
 
 ```promql
-avg(rate(gthulhu_pod_cpu_migrations_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
-avg(rate(gthulhu_pod_numa_migrations_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
-max by (pod_name) (rate(gthulhu_pod_involuntary_ctx_switches_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
+avg(rate(gthulhu_pod_cpu_migrations_total{exported_namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
+avg(rate(gthulhu_pod_numa_migrations_total{exported_namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
+max by (pod_name) (rate(gthulhu_pod_involuntary_ctx_switches_total{exported_namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
 ```
 
 Thresholds must be calibrated on the actual WOMS cluster.
 
 ## Required WOMS Helm Change After Gthulhu Preflight
 
-The current WOMS chart does not yet have `keda.gthulhu`. Add this only after Gthulhu preflight proves the Prometheus query returns a stable scalar. The optional values block should be:
+Phase 0/Phase 1 proved that the Prometheus query returns a stable scalar. The WOMS chart now provides this disabled-by-default `keda.gthulhu` optional values block:
 
 ```yaml
 keda:
   gthulhu:
     enabled: false
-    prometheusServerAddress: http://prometheus-kube-prometheus-prometheus.monitoring:9090
+    prometheusServerAddress: http://monitoring-kube-prometheus-prometheus.monitoring:9090
     metricName: woms_worker_gthulhu_involuntary_ctx_switches_rate
     threshold: "20"
     query: |
-      avg(rate(gthulhu_pod_involuntary_ctx_switches_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
+      avg(rate(gthulhu_pod_involuntary_ctx_switches_total{exported_namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
 ```
 
-Then extend `deploy/helm/woms/templates/keda-scaledobject.yaml` inside the existing `triggers:` list:
+`deploy/helm/woms/templates/keda-scaledobject.yaml` conditionally renders this inside the existing `triggers:` list:
 
 ```yaml
 {{- if .Values.keda.gthulhu.enabled }}
@@ -229,7 +233,7 @@ Then extend `deploy/helm/woms/templates/keda-scaledobject.yaml` inside the exist
 {{- end }}
 ```
 
-After that change, update `deploy/helm/woms/chart-static.test.mjs` and `scripts/verify-hpa-render.sh` so CI can prove the optional prometheus trigger renders only when enabled.
+`deploy/helm/woms/chart-static.test.mjs` and `scripts/verify-hpa-render.sh` now verify that the optional prometheus trigger renders only when enabled.
 
 If Gthulhu later provides a verified controller that can own the complete WOMS worker scaler, including Kafka lag, CPU utilization, Gthulhu Prometheus metrics, HPA name, min/max replicas, and scale behavior, then this Helm change can be replaced by delegating the whole worker `ScaledObject` to that controller. Do not split ownership between two charts for the same worker deployment.
 
@@ -317,7 +321,7 @@ Render check after adding `keda.gthulhu`:
 helm template woms ./deploy/helm/woms --dependency-update \
   --namespace woms \
   --set keda.gthulhu.enabled=true \
-  --set keda.gthulhu.prometheusServerAddress=http://prometheus-kube-prometheus-prometheus.monitoring:9090
+  --set keda.gthulhu.prometheusServerAddress=http://monitoring-kube-prometheus-prometheus.monitoring:9090
 ```
 
 Kubernetes checks:
@@ -333,10 +337,10 @@ kubectl get podschedulingmetrics -n woms
 Prometheus checks:
 
 ```promql
-avg(rate(gthulhu_pod_involuntary_ctx_switches_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
-avg(rate(gthulhu_pod_wait_time_nanoseconds_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m])) / 1000000000
-avg(rate(gthulhu_pod_cpu_migrations_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
-avg(rate(gthulhu_pod_numa_migrations_total{namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
+avg(rate(gthulhu_pod_involuntary_ctx_switches_total{exported_namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
+avg(rate(gthulhu_pod_wait_time_nanoseconds_total{exported_namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m])) / 1000000000
+avg(rate(gthulhu_pod_cpu_migrations_total{exported_namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
+avg(rate(gthulhu_pod_numa_migrations_total{exported_namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
 ```
 
 Grafana dashboard minimum panels:

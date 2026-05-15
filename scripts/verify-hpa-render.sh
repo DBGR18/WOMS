@@ -2,8 +2,10 @@
 set -eu
 
 RELEASE="${RELEASE:-woms}"
+NAMESPACE="${NAMESPACE:-woms}"
 CHART="${CHART:-./deploy/helm/woms}"
 RENDERED_MANIFEST="${RENDERED_MANIFEST:-}"
+GTHULHU_ENABLED="${GTHULHU_ENABLED:-false}"
 
 if [ -n "$RENDERED_MANIFEST" ]; then
   rendered="$RENDERED_MANIFEST"
@@ -11,7 +13,11 @@ else
   rendered="$(mktemp)"
   trap 'rm -f "$rendered"' EXIT
 
-  helm template "$RELEASE" "$CHART" --dependency-update >"$rendered"
+  if [ "$GTHULHU_ENABLED" = "true" ]; then
+    helm template "$RELEASE" "$CHART" --dependency-update --namespace "$NAMESPACE" --set keda.gthulhu.enabled=true >"$rendered"
+  else
+    helm template "$RELEASE" "$CHART" --dependency-update --namespace "$NAMESPACE" >"$rendered"
+  fi
 fi
 
 grep -q "kind: ScaledObject" "$rendered"
@@ -28,6 +34,19 @@ grep -q 'lagThreshold: "10"' "$rendered"
 grep -q "type: cpu" "$rendered"
 grep -q "metricType: Utilization" "$rendered"
 grep -q 'value: "70"' "$rendered"
+prometheus_triggers="$(grep -c "type: prometheus" "$rendered" || true)"
+gthulhu_metrics="$(grep -c 'metricName: "woms_worker_gthulhu_involuntary_ctx_switches_rate"' "$rendered" || true)"
+if [ "$GTHULHU_ENABLED" = "true" ]; then
+  [ "$prometheus_triggers" -eq 1 ]
+  [ "$gthulhu_metrics" -eq 1 ]
+  grep -q 'serverAddress: "http://monitoring-kube-prometheus-prometheus.monitoring:9090"' "$rendered"
+  expected_query="query: \"avg(rate(gthulhu_pod_involuntary_ctx_switches_total{exported_namespace=\\\"${NAMESPACE}\\\",pod_name=~\\\"${RELEASE}-woms-worker-.*\\\"}[2m]))\""
+  grep -Fq "$expected_query" "$rendered"
+  grep -q 'threshold: "20"' "$rendered"
+else
+  [ "$prometheus_triggers" -eq 0 ]
+  [ "$gthulhu_metrics" -eq 0 ]
+fi
 grep -q "scaleUp:" "$rendered"
 grep -q "stabilizationWindowSeconds: 0" "$rendered"
 grep -q "scaleDown:" "$rendered"

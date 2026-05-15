@@ -133,8 +133,6 @@ Expected:
 - If CPU trigger does not work, verify metrics-server and pod resource requests first.
 - After the demo, click the clear peak data button and confirm `L001-L200` orders and jobs are removed.
 
-## 7. Redis Lock Verification
-
 ## 7. API/Web High Availability Verification
 
 ```bash
@@ -149,7 +147,55 @@ Expected:
 - API and web PDBs each require `minAvailable: 1`.
 - During voluntary disruption on a multi-node cluster, at least one API and one web pod remain available.
 
-## 8. Redis Lock Verification
+## 8. Gthulhu HPA Demo Verification
+
+Prerequisites:
+
+- MicroK8s has `registry`, `rbac`, KEDA, and metrics-server enabled.
+- Gthulhu monitor-only is deployed and scraped by Prometheus.
+- WOMS `ScaledObject/woms-woms-worker` has the third Gthulhu Prometheus trigger enabled.
+- The Prometheus query uses `exported_namespace="woms"`, not `namespace="woms"`.
+
+Confirm trigger wiring:
+
+```bash
+kubectl get scaledobject woms-woms-worker -n woms -o yaml
+kubectl describe hpa woms-woms-worker-hpa -n woms
+```
+
+Expected:
+
+- `ScaledObject` has three triggers: Kafka, CPU, and Prometheus.
+- Kafka is still `lagThreshold: "10"`.
+- CPU is still `value: "70"`.
+- Gthulhu scaler health is `Happy`.
+
+Proof demo flow:
+
+1. Temporarily set `keda.gthulhu.threshold` to `1` without changing Kafka or CPU triggers.
+2. Run the multi-line scheduling peak demo.
+3. Watch HPA events:
+
+```bash
+kubectl describe hpa woms-woms-worker-hpa -n woms
+```
+
+A successful run shows events like:
+
+```text
+New size: 4; reason: external metric s2-prometheus-woms_worker_gthulhu_involuntary_ctx_switches_rate above target
+New size: 8; reason: external metric s2-prometheus-woms_worker_gthulhu_involuntary_ctx_switches_rate above target
+```
+
+Prometheus check:
+
+```promql
+avg(rate(gthulhu_pod_involuntary_ctx_switches_total{exported_namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
+```
+
+Restore the threshold to a conservative value such as `20` after the demo. On the current single-node MicroK8s VM, threshold `5` plus node-level CPU pressure did not reliably prove realistic Gthulhu-only scale-out. After restarting the Gthulhu monitor, worker-pod ephemeral pressure can push the Gthulhu metric above `5`, but it also triggers the CPU scaler, so the HPA reason can still be CPU. For product demos, describe `threshold=1` as proof/demo calibration, not a production recommendation.
+
+## 9. Redis Lock Verification
 
 Submit two concurrent schedule jobs for the same line:
 
@@ -160,7 +206,7 @@ Submit jobs for different lines:
 
 - Expected: processing can run in parallel.
 
-## 9. Feature Completion Standard
+## 10. Feature Completion Standard
 
 - Tests pass.
 - README zh-TW/en is updated.
@@ -168,7 +214,7 @@ Submit jobs for different lines:
 - Docker/Helm/CI settings are synced.
 - `git add`, commit, and push are completed.
 
-## 10. Frontend Smoke Verification
+## 11. Frontend Smoke Verification
 
 - Login at `http://127.0.0.1:8081`.
 - Refresh the browser and confirm the session is restored.
