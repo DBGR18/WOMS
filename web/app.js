@@ -570,6 +570,7 @@ function renderAuthState() {
   document.body.dataset.role = state.user?.role ?? "";
   document.getElementById("login-page").hidden = loggedIn;
   document.getElementById("app-shell").hidden = !loggedIn;
+  document.getElementById("monitor-link").hidden = state.user?.role !== "admin";
   document.getElementById("admin-panel").hidden = state.user?.role !== "admin";
   document.getElementById("order-form").hidden = state.user?.role !== "sales";
   document.getElementById("sales-rejected-panel").hidden = state.user?.role !== "sales";
@@ -1448,15 +1449,15 @@ function renderConflictDueDateEditors(conflicts) {
     <div class="conflict-due-date-editors">
       <h4>修改單筆交期後重試</h4>
       ${orderIds.map((orderId) => {
-        const order = state.orders.find((item) => item.id === orderId);
-        return `
+    const order = state.orders.find((item) => item.id === orderId);
+    return `
           <label>
             <span>${escapeHtml(orderId)}</span>
             <input data-conflict-due-date="${escapeHtml(orderId)}" type="date" min="${tomorrowDateInputValue()}" value="${dateOnly(order.dueDate)}">
           </label>
           <button data-preview-action="update-conflict-due-date" data-order-id="${escapeHtml(orderId)}" type="button">更新 ${escapeHtml(orderId)} 交期並重試</button>
         `;
-      }).join("")}
+  }).join("")}
     </div>
   `;
 }

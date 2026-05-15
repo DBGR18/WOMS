@@ -122,5 +122,51 @@ services:
     ports:
       - "8081:8080"
 
+  # ─── Monitoring Stack ───────────────────────────────────────────
+  # Gthulhu: infrastructure metrics agent for Postgres, Redis, Kafka
+  # gthulhu:
+  #   image: ghcr.io/gthulhu/gthulhu:latest
+  #   environment:
+  #     GTHULHU_POSTGRES_DSN: postgres://woms:woms@postgres:5432/woms?sslmode=disable
+  #     GTHULHU_REDIS_ADDR: redis:6379
+  #     GTHULHU_KAFKA_BROKERS: kafka:9092
+  #     GTHULHU_METRICS_PORT: "9091"
+  #   depends_on:
+  #     - postgres
+  #     - redis
+  #     - kafka
+  #   ports:
+  #     - "9091:9091"
+
+  # Prometheus: central metrics scraper
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - api
+      # - gthulhu
+    ports:
+      - "9090:9090"
+
+  # Grafana: dashboards with anonymous read-only access for iframe embed
+  grafana:
+    image: grafana/grafana:11.1.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+      GF_SECURITY_COOKIE_SAMESITE: disabled
+      GF_SECURITY_COOKIE_SECURE: "false"
+    volumes:
+      - grafana-storage:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+
 volumes:
   postgres-data:
+  grafana-storage:
+
