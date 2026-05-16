@@ -296,7 +296,7 @@ kubectl port-forward svc/woms-woms-web 8081:8080 -n woms
 
 瀏覽器開啟 `http://127.0.0.1:8081`，demo 帳號為 `admin` / `demo`。
 
-web container 會把 `/api/` 代理到 `API_UPSTREAM`，Helm chart 會設定為 `woms-woms-api:8080`。NGINX template 會直接 render 這個 upstream，並使用 Kubernetes 寫入 Pod 的 resolver；Kubernetes 部署中不應使用 `127.0.0.11` 這類 Docker-only DNS。
+在 Helm/Kubernetes 中，web container 會把 `/api/` 代理到 `API_UPSTREAM`，chart 會設定為 `woms-woms-api:8080`。Kubernetes NGINX template 會直接 render 這個 upstream，並使用 Kubernetes 寫入 Pod 的 resolver；Kubernetes 部署中不應使用 `127.0.0.11` 這類 Docker-only DNS。Docker Compose 會改掛載 `web/nginx.compose.conf.template`，讓本機 Compose 環境使用 Docker embedded resolver，並在 API container 重建後重新解析 `api` service。
 
 如果瀏覽器在另一台 Windows 主機，而 WOMS 跑在 VM `192.168.56.101`，先從 Windows 建立 SSH tunnel：
 

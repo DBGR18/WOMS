@@ -52,11 +52,18 @@ test("front-end visible HPA status labels are zh-TW", () => {
 
 test("web nginx proxy preserves API request paths", () => {
   const nginx = readFileSync(new URL("./nginx.conf.template", import.meta.url), "utf8");
+  const composeNginx = readFileSync(new URL("./nginx.compose.conf.template", import.meta.url), "utf8");
+  const compose = readFileSync(new URL("../docker-compose.yml", import.meta.url), "utf8");
   assert.match(nginx, /location \/api\/ \{/);
   assert.match(nginx, /proxy_pass http:\/\/\$\{API_UPSTREAM\};/);
   assert.doesNotMatch(nginx, /resolver 127\.0\.0\.11/);
   assert.doesNotMatch(nginx, /proxy_pass http:\/\/\$\{API_UPSTREAM\}\/api\//);
   assert.doesNotMatch(nginx, /proxy_pass \$api_upstream;/);
+  assert.match(composeNginx, /resolver 127\.0\.0\.11 valid=10s ipv6=off;/);
+  assert.match(composeNginx, /set \$api_upstream http:\/\/\$\{API_UPSTREAM\};/);
+  assert.match(composeNginx, /proxy_pass \$api_upstream;/);
+  assert.doesNotMatch(composeNginx, /proxy_pass \$api_upstream\/api\//);
+  assert.match(compose, /nginx\.compose\.conf\.template:\/etc\/nginx\/templates\/default\.conf\.template:ro/);
 });
 
 test("order cards support pointer fallback drag scheduling", () => {

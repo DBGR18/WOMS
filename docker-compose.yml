@@ -109,6 +109,8 @@ services:
       dockerfile: Dockerfile.web
     environment:
       API_UPSTREAM: ${API_UPSTREAM:-api:8080}
+    volumes:
+      - ./web/nginx.compose.conf.template:/etc/nginx/templates/default.conf.template:ro
     depends_on:
       api:
         condition: service_healthy

@@ -293,7 +293,7 @@ kubectl port-forward svc/woms-woms-web 8081:8080 -n woms
 
 Open `http://127.0.0.1:8081` and log in with `admin` / `demo`.
 
-The web container proxies `/api/` to `API_UPSTREAM`, which the Helm chart sets to `woms-woms-api:8080`. The NGINX template renders that upstream directly and relies on the Pod resolver from Kubernetes; it must not use Docker-only DNS such as `127.0.0.11` in Kubernetes.
+In Helm/Kubernetes, the web container proxies `/api/` to `API_UPSTREAM`, which the chart sets to `woms-woms-api:8080`. The Kubernetes NGINX template renders that upstream directly and relies on the Pod resolver from Kubernetes; it must not use Docker-only DNS such as `127.0.0.11` in Kubernetes. Docker Compose mounts `web/nginx.compose.conf.template` instead, so local Compose runs can use Docker's embedded resolver and re-resolve the `api` service after the API container is recreated.
 
 If the browser runs on a Windows host and WOMS runs on VM `192.168.56.101`, create an SSH tunnel from Windows first:
 
