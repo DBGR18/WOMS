@@ -53,9 +53,10 @@ test("front-end visible HPA status labels are zh-TW", () => {
 test("web nginx proxy preserves API request paths", () => {
   const nginx = readFileSync(new URL("./nginx.conf.template", import.meta.url), "utf8");
   assert.match(nginx, /location \/api\/ \{/);
-  assert.match(nginx, /set \$api_upstream http:\/\/\$\{API_UPSTREAM\};/);
-  assert.match(nginx, /proxy_pass \$api_upstream;/);
-  assert.doesNotMatch(nginx, /proxy_pass \$api_upstream\/api\//);
+  assert.match(nginx, /proxy_pass http:\/\/\$\{API_UPSTREAM\};/);
+  assert.doesNotMatch(nginx, /resolver 127\.0\.0\.11/);
+  assert.doesNotMatch(nginx, /proxy_pass http:\/\/\$\{API_UPSTREAM\}\/api\//);
+  assert.doesNotMatch(nginx, /proxy_pass \$api_upstream;/);
 });
 
 test("order cards support pointer fallback drag scheduling", () => {

@@ -267,6 +267,14 @@ kubectl get job,pod -n woms -l app.kubernetes.io/component=kafka-topic
 kubectl logs job/woms-woms-kafka-topic -n woms
 ```
 
+Kafka topic 是 broker 內部資源，不是 Kubernetes resource。不要用 `kubectl get` 尋找 `woms.schedule.jobs`；請透過 Kafka 驗證：
+
+```bash
+kubectl exec -n woms kafka-controller-0 -- \
+  kafka-topics.sh --bootstrap-server kafka.woms.svc.cluster.local:9092 \
+  --describe --topic woms.schedule.jobs
+```
+
 本機或 VM demo 可用 port-forward 開啟前端：
 
 ```bash
@@ -274,6 +282,8 @@ kubectl port-forward svc/woms-woms-web 8081:8080 -n woms
 ```
 
 瀏覽器開啟 `http://127.0.0.1:8081`，demo 帳號為 `admin` / `demo`。
+
+web container 會把 `/api/` 代理到 `API_UPSTREAM`，Helm chart 會設定為 `woms-woms-api:8080`。NGINX template 會直接 render 這個 upstream，並使用 Kubernetes 寫入 Pod 的 resolver；Kubernetes 部署中不應使用 `127.0.0.11` 這類 Docker-only DNS。
 
 如果瀏覽器在另一台 Windows 主機，而 WOMS 跑在 VM `192.168.56.101`，先從 Windows 建立 SSH tunnel：
 

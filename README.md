@@ -264,6 +264,14 @@ kubectl get job,pod -n woms -l app.kubernetes.io/component=kafka-topic
 kubectl logs job/woms-woms-kafka-topic -n woms
 ```
 
+Kafka topics are broker resources, not Kubernetes resources. Do not use `kubectl get` to look for `woms.schedule.jobs`; verify it through Kafka instead:
+
+```bash
+kubectl exec -n woms kafka-controller-0 -- \
+  kafka-topics.sh --bootstrap-server kafka.woms.svc.cluster.local:9092 \
+  --describe --topic woms.schedule.jobs
+```
+
 For a local or VM demo, expose the web UI with port-forward:
 
 ```bash
@@ -271,6 +279,8 @@ kubectl port-forward svc/woms-woms-web 8081:8080 -n woms
 ```
 
 Open `http://127.0.0.1:8081` and log in with `admin` / `demo`.
+
+The web container proxies `/api/` to `API_UPSTREAM`, which the Helm chart sets to `woms-woms-api:8080`. The NGINX template renders that upstream directly and relies on the Pod resolver from Kubernetes; it must not use Docker-only DNS such as `127.0.0.11` in Kubernetes.
 
 If the browser runs on a Windows host and WOMS runs on VM `192.168.56.101`, create an SSH tunnel from Windows first:
 
