@@ -216,11 +216,24 @@ microk8s kubectl get pods -A
 平台 pods 健康前不要繼續部署 WOMS。`microk8s kubectl get pods -A` 應顯示 `kube-system` 與 `keda` pods 都是 `Running`，namespace events 不應出現 `MissingClusterDNS`。如果看到 `MissingClusterDNS`，請在能完成 sudo-backed kubelet 更新的 shell 重新執行 `microk8s enable dns`，再確認 kubelet 的 cluster DNS 值與 `kube-dns` Service `CLUSTER-IP` 一致，且有 `--cluster-domain=cluster.local`：
 
 ```bash
-microk8s kubectl -n kube-system get svc kube-dns
+microk8s kubectl -n kube-system get pod -l k8s-app=kube-dns
+microk8s kubectl -n kube-system get svc kube-dns -o wide
 grep -E 'cluster-dns|cluster-domain' /var/snap/microk8s/current/args/kubelet
 ```
 
-本次驗證的 MicroK8s VM 使用 `--cluster-dns=10.152.183.10`，但其他叢集可能會使用不同的 CoreDNS Service IP。
+本次驗證的 MicroK8s VM 使用 `--cluster-dns=10.152.183.10`，但其他叢集可能會使用不同的 CoreDNS Service IP。不要直接照抄這個值；每台 VM 都要證明：
+
+- `kube-dns` / CoreDNS pods 是 `Running`。
+- kubelet `--cluster-dns` 等於 `kube-dns` Service 的 `CLUSTER-IP`。
+- kubelet 有 `--cluster-domain=cluster.local`。
+
+WOMS pods 建立後，也要確認 application pod 真的拿到這個 resolver：
+
+```bash
+microk8s kubectl exec -n woms deploy/woms-woms-web -- cat /etc/resolv.conf
+```
+
+Pod 裡的 `nameserver` 應等於 `kube-dns` Service 的 `CLUSTER-IP`，search path 應包含 `woms.svc.cluster.local`、`svc.cluster.local` 與 `cluster.local`。
 
 若使用 MicroK8s 而不是獨立安裝的 `kubectl` 與 `helm`，可以先在目前 shell 設定 alias，或把下方指令改成 `microk8s kubectl` 與 `microk8s helm3`。
 

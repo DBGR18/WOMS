@@ -215,11 +215,24 @@ microk8s kubectl get pods -A
 Do not continue until the platform pods are healthy. `microk8s kubectl get pods -A` should show the `kube-system` and `keda` pods as `Running`, and namespace events should not contain `MissingClusterDNS`. If `MissingClusterDNS` appears, rerun `microk8s enable dns` in a shell that can complete its sudo-backed kubelet update, then confirm kubelet has a cluster DNS value that matches the `kube-dns` Service `CLUSTER-IP` and `--cluster-domain=cluster.local`:
 
 ```bash
-microk8s kubectl -n kube-system get svc kube-dns
+microk8s kubectl -n kube-system get pod -l k8s-app=kube-dns
+microk8s kubectl -n kube-system get svc kube-dns -o wide
 grep -E 'cluster-dns|cluster-domain' /var/snap/microk8s/current/args/kubelet
 ```
 
-The verified MicroK8s VM used `--cluster-dns=10.152.183.10`, but other clusters may use a different CoreDNS Service IP.
+The verified MicroK8s VM used `--cluster-dns=10.152.183.10`, but other clusters may use a different CoreDNS Service IP. Do not copy that value blindly. For each VM, prove that:
+
+- `kube-dns` / CoreDNS pods are `Running`.
+- kubelet `--cluster-dns` equals the `kube-dns` Service `CLUSTER-IP`.
+- kubelet has `--cluster-domain=cluster.local`.
+
+After WOMS pods exist, also confirm an application pod received that resolver:
+
+```bash
+microk8s kubectl exec -n woms deploy/woms-woms-web -- cat /etc/resolv.conf
+```
+
+The pod `nameserver` should match the `kube-dns` Service `CLUSTER-IP`, and the search path should include `woms.svc.cluster.local`, `svc.cluster.local`, and `cluster.local`.
 
 If you use MicroK8s instead of standalone `kubectl` and `helm`, either alias the commands for the current shell or replace the commands below with `microk8s kubectl` and `microk8s helm3`.
 
