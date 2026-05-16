@@ -24,6 +24,13 @@ import {
   waterlineMetrics,
 } from "./ui.js";
 
+function sharedNginxServerConfig(config) {
+  return config
+    .replace(/^\s*resolver 127\.0\.0\.11 valid=10s ipv6=off;\n/m, "")
+    .replace(/^\s*set \$api_upstream http:\/\/\$\{API_UPSTREAM\};\n/m, "")
+    .replace("proxy_pass $api_upstream;", "proxy_pass http://${API_UPSTREAM};");
+}
+
 test("preview copy uses state-specific titles instead of mixed conflict/allocation wording", () => {
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");
@@ -54,6 +61,7 @@ test("web nginx proxy preserves API request paths", () => {
   const nginx = readFileSync(new URL("./nginx.conf.template", import.meta.url), "utf8");
   const composeNginx = readFileSync(new URL("./nginx.compose.conf.template", import.meta.url), "utf8");
   const compose = readFileSync(new URL("../docker-compose.yml", import.meta.url), "utf8");
+  assert.equal(sharedNginxServerConfig(composeNginx), sharedNginxServerConfig(nginx));
   assert.match(nginx, /location \/api\/ \{/);
   assert.match(nginx, /proxy_pass http:\/\/\$\{API_UPSTREAM\};/);
   assert.doesNotMatch(nginx, /resolver 127\.0\.0\.11/);
