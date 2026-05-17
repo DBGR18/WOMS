@@ -26,8 +26,8 @@ import {
 
 function sharedNginxServerConfig(config) {
   return config
-    .replace(/^\s*resolver \${NGINX_RESOLVER} valid=10s ipv6=off;\n/m, "")
-    .replace(/^\s*set \$api_upstream http:\/\/\$\{API_UPSTREAM\};\n/m, "")
+    .replace(/^[^\S\n]*resolver \$\{NGINX_RESOLVER\} valid=10s ipv6=off;\n/m, "")
+    .replace(/^[^\S\n]*set \$api_upstream http:\/\/\$\{API_UPSTREAM\};\n/m, "")
     .replace("proxy_pass $api_upstream;", "proxy_pass http://${API_UPSTREAM};");
 }
 
@@ -64,7 +64,7 @@ test("web nginx proxy preserves API request paths", () => {
   assert.equal(sharedNginxServerConfig(composeNginx), sharedNginxServerConfig(nginx));
   assert.match(nginx, /location \/api\/ \{/);
   assert.match(nginx, /proxy_pass http:\/\/\$\{API_UPSTREAM\};/);
-  assert.doesNotMatch(nginx, /resolver \${NGINX_RESOLVER} valid=10s ipv6=off;/);
+  assert.match(nginx, /resolver \$\{NGINX_RESOLVER\} valid=10s ipv6=off;/);
   assert.doesNotMatch(nginx, /proxy_pass http:\/\/\$\{API_UPSTREAM\}\/api\//);
   assert.doesNotMatch(nginx, /proxy_pass \$api_upstream;/);
   assert.match(composeNginx, /resolver \${NGINX_RESOLVER} valid=10s ipv6=off;/);
