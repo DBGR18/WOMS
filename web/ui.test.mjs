@@ -26,7 +26,7 @@ import {
 
 function sharedNginxServerConfig(config) {
   return config
-    .replace(/^\s*resolver 127\.0\.0\.11 valid=10s ipv6=off;\n/m, "")
+    .replace(/^\s*resolver \${NGINX_RESOLVER} valid=10s ipv6=off;\n/m, "")
     .replace(/^\s*set \$api_upstream http:\/\/\$\{API_UPSTREAM\};\n/m, "")
     .replace("proxy_pass $api_upstream;", "proxy_pass http://${API_UPSTREAM};");
 }
