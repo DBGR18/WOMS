@@ -64,10 +64,10 @@ test("web nginx proxy preserves API request paths", () => {
   assert.equal(sharedNginxServerConfig(composeNginx), sharedNginxServerConfig(nginx));
   assert.match(nginx, /location \/api\/ \{/);
   assert.match(nginx, /proxy_pass http:\/\/\$\{API_UPSTREAM\};/);
-  assert.doesNotMatch(nginx, /resolver 127\.0\.0\.11/);
+  assert.doesNotMatch(nginx, /resolver \${NGINX_RESOLVER} valid=10s ipv6=off;/);
   assert.doesNotMatch(nginx, /proxy_pass http:\/\/\$\{API_UPSTREAM\}\/api\//);
   assert.doesNotMatch(nginx, /proxy_pass \$api_upstream;/);
-  assert.match(composeNginx, /resolver 127\.0\.0\.11 valid=10s ipv6=off;/);
+  assert.match(composeNginx, /resolver \${NGINX_RESOLVER} valid=10s ipv6=off;/);
   assert.match(composeNginx, /set \$api_upstream http:\/\/\$\{API_UPSTREAM\};/);
   assert.match(composeNginx, /proxy_pass \$api_upstream;/);
   assert.doesNotMatch(composeNginx, /proxy_pass \$api_upstream\/api\//);
