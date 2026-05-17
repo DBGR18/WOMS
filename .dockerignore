@@ -9,3 +9,4 @@ tmp
 *.log
 node_modules
 web/dist
+web/nginx.compose.conf.template

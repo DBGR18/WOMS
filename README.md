@@ -215,11 +215,24 @@ microk8s kubectl get pods -A
 Do not continue until the platform pods are healthy. `microk8s kubectl get pods -A` should show the `kube-system` and `keda` pods as `Running`, and namespace events should not contain `MissingClusterDNS`. If `MissingClusterDNS` appears, rerun `microk8s enable dns` in a shell that can complete its sudo-backed kubelet update, then confirm kubelet has a cluster DNS value that matches the `kube-dns` Service `CLUSTER-IP` and `--cluster-domain=cluster.local`:
 
 ```bash
-microk8s kubectl -n kube-system get svc kube-dns
+microk8s kubectl -n kube-system get pod -l k8s-app=kube-dns
+microk8s kubectl -n kube-system get svc kube-dns -o wide
 grep -E 'cluster-dns|cluster-domain' /var/snap/microk8s/current/args/kubelet
 ```
 
-The verified MicroK8s VM used `--cluster-dns=10.152.183.10`, but other clusters may use a different CoreDNS Service IP.
+The verified MicroK8s VM used `--cluster-dns=10.152.183.10`, but other clusters may use a different CoreDNS Service IP. Do not copy that value blindly. For each VM, prove that:
+
+- `kube-dns` / CoreDNS pods are `Running`.
+- kubelet `--cluster-dns` equals the `kube-dns` Service `CLUSTER-IP`.
+- kubelet has `--cluster-domain=cluster.local`.
+
+After WOMS pods exist, also confirm an application pod received that resolver:
+
+```bash
+microk8s kubectl exec -n woms deploy/woms-woms-web -- cat /etc/resolv.conf
+```
+
+The pod `nameserver` should match the `kube-dns` Service `CLUSTER-IP`, and the search path should include `woms.svc.cluster.local`, `svc.cluster.local`, and `cluster.local`.
 
 If you use MicroK8s instead of standalone `kubectl` and `helm`, either alias the commands for the current shell or replace the commands below with `microk8s kubectl` and `microk8s helm3`.
 
@@ -264,6 +277,14 @@ kubectl get job,pod -n woms -l app.kubernetes.io/component=kafka-topic
 kubectl logs job/woms-woms-kafka-topic -n woms
 ```
 
+Kafka topics are broker resources, not Kubernetes resources. Do not use `kubectl get` to look for `woms.schedule.jobs`; verify it through Kafka instead:
+
+```bash
+kubectl exec -n woms kafka-controller-0 -- \
+  kafka-topics.sh --bootstrap-server kafka.woms.svc.cluster.local:9092 \
+  --describe --topic woms.schedule.jobs
+```
+
 For a local or VM demo, expose the web UI with port-forward:
 
 ```bash
@@ -271,6 +292,8 @@ kubectl port-forward svc/woms-woms-web 8081:8080 -n woms
 ```
 
 Open `http://127.0.0.1:8081` and log in with `admin` / `demo`.
+
+In Helm/Kubernetes, the web container proxies `/api/` to `API_UPSTREAM`, which the chart sets to `woms-woms-api:8080`. The Kubernetes NGINX template renders that upstream directly and relies on the Pod resolver from Kubernetes; it must not use Docker-only DNS such as `127.0.0.11` in Kubernetes. Docker Compose mounts `web/nginx.compose.conf.template` instead, so local Compose runs can use Docker's embedded resolver and re-resolve the `api` service after the API container is recreated.
 
 If the browser runs on a Windows host and WOMS runs on VM `192.168.56.101`, create an SSH tunnel from Windows first:
 

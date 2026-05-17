@@ -24,6 +24,13 @@ import {
   waterlineMetrics,
 } from "./ui.js";
 
+function sharedNginxServerConfig(config) {
+  return config
+    .replace(/^[^\S\n]*resolver \$\{NGINX_RESOLVER\} valid=10s ipv6=off;\n/m, "")
+    .replace(/^[^\S\n]*set \$api_upstream http:\/\/\$\{API_UPSTREAM\};\n/m, "")
+    .replace("proxy_pass $api_upstream;", "proxy_pass http://${API_UPSTREAM};");
+}
+
 test("preview copy uses state-specific titles instead of mixed conflict/allocation wording", () => {
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");
@@ -52,10 +59,19 @@ test("front-end visible HPA status labels are zh-TW", () => {
 
 test("web nginx proxy preserves API request paths", () => {
   const nginx = readFileSync(new URL("./nginx.conf.template", import.meta.url), "utf8");
+  // const composeNginx = readFileSync(new URL("./nginx.compose.conf.template", import.meta.url), "utf8");
+  const compose = readFileSync(new URL("../docker-compose.yml", import.meta.url), "utf8");
+  // assert.equal(sharedNginxServerConfig(composeNginx), sharedNginxServerConfig(nginx));
   assert.match(nginx, /location \/api\/ \{/);
-  assert.match(nginx, /set \$api_upstream http:\/\/\$\{API_UPSTREAM\};/);
-  assert.match(nginx, /proxy_pass \$api_upstream;/);
-  assert.doesNotMatch(nginx, /proxy_pass \$api_upstream\/api\//);
+  assert.match(nginx, /proxy_pass http:\/\/\$\{API_UPSTREAM\};/);
+  assert.match(nginx, /resolver \$\{NGINX_RESOLVER\} valid=10s ipv6=off;/);
+  assert.doesNotMatch(nginx, /proxy_pass http:\/\/\$\{API_UPSTREAM\}\/api\//);
+  assert.doesNotMatch(nginx, /proxy_pass \$api_upstream;/);
+  // assert.match(composeNginx, /resolver \${NGINX_RESOLVER} valid=10s ipv6=off;/);
+  // assert.match(composeNginx, /set \$api_upstream http:\/\/\$\{API_UPSTREAM\};/);
+  // assert.match(composeNginx, /proxy_pass \$api_upstream;/);
+  // assert.doesNotMatch(composeNginx, /proxy_pass \$api_upstream\/api\//);
+  assert.match(compose, /nginx\.compose\.conf\.template:\/etc\/nginx\/templates\/default\.conf\.template:ro/);
 });
 
 test("order cards support pointer fallback drag scheduling", () => {

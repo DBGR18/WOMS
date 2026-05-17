@@ -1,5 +1,7 @@
 FROM nginx:1.27-alpine
 ENV API_UPSTREAM=api:8080
+COPY web/docker-entrypoints.sh /docker-entrypoint.d/40-resolver.sh
+RUN chmod +x /docker-entrypoint.d/40-resolver.sh
 COPY web/nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY web /usr/share/nginx/html
 EXPOSE 8080
