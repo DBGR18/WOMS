@@ -133,6 +133,8 @@ test("HPA behavior CPU scenario removes its injected load sidecar during cleanup
   assert.match(hpaBehaviorScript, /"\$patch": "delete"/);
   assert.match(hpaBehaviorScript, /rollout status "deployment\/\$\{WORKER_DEPLOY\}"/);
   assert.match(hpaBehaviorScript, /if \[ "\$RESTORE_HELM" = "true" \]/);
+  assert.match(hpaBehaviorScript, /restore_default_hpa_config\(\)/);
+  assert.doesNotMatch(hpaBehaviorScript, /cleanup\nCLEANED_UP=false/);
 });
 
 test("Default Docker image tags use v-prefixed release tags", () => {

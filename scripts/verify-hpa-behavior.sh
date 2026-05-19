@@ -26,10 +26,7 @@ cleanup() {
     remove_worker_deployment_cpu_load >/dev/null 2>&1 || true
   fi
   if [ "$RESTORE_HELM" = "true" ]; then
-    helm_upgrade \
-      --set keda.kafka.enabled=true \
-      --set keda.cpu.enabled=true \
-      --set keda.gthulhu.enabled=true >/dev/null 2>&1 || true
+    restore_default_hpa_config >/dev/null 2>&1 || true
   fi
 }
 trap cleanup EXIT
@@ -62,6 +59,13 @@ helm_upgrade() {
     --set "gthulhu.scheduler.sidecar.image.tag=${GTHULHU_IMAGE_TAG}" \
     --set "gthulhu.manager.image.tag=${GTHULHU_IMAGE_TAG}" \
     "$@"
+}
+
+restore_default_hpa_config() {
+  helm_upgrade \
+    --set keda.kafka.enabled=true \
+    --set keda.cpu.enabled=true \
+    --set keda.gthulhu.enabled=true
 }
 
 run_worker_like_load_pod() {
@@ -190,16 +194,17 @@ esac
 
 "$KUBECTL" get scaledobject "$WORKER_DEPLOY" -n "$NAMESPACE" -o yaml
 wait_replicas 2 ge
-cleanup
-CLEANED_UP=false
+"$KUBECTL" delete job,pod -n "$NAMESPACE" -l "$LOAD_LABEL" --ignore-not-found=true
+if [ "$CPU_LOAD_INJECTED" = "true" ]; then
+  remove_worker_deployment_cpu_load
+  CPU_LOAD_INJECTED=false
+fi
+if [ "$RESTORE_HELM" = "true" ]; then
+  restore_default_hpa_config
+  RESTORE_HELM=false
+fi
 
-helm_upgrade \
-  --set keda.kafka.enabled=true \
-  --set keda.cpu.enabled=true \
-  --set keda.gthulhu.enabled=true
 "$KUBECTL" rollout status "deployment/${WORKER_DEPLOY}" -n "$NAMESPACE" --timeout=180s
-RESTORE_HELM=false
-CPU_LOAD_INJECTED=false
 wait_replicas 1 le
 
 echo "HPA ${HPA_SCENARIO} behavior verification passed"

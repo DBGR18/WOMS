@@ -22,9 +22,9 @@ func main() {
 	if env("API_STORE", "memory") == "postgres" {
 		ctx, cancel := context.WithTimeout(context.Background(), dependencyTimeout)
 		var postgresStore *api.PostgresStore
-		err := startup.RetryDependency(ctx, "postgres store", dependencyInterval, log.Printf, func(context.Context) error {
+		err := startup.RetryDependency(ctx, "postgres store", dependencyInterval, log.Printf, func(ctx context.Context) error {
 			var err error
-			postgresStore, err = api.NewPostgresStore(env("DATABASE_URL", ""), env("DEMO_SEED_DATA", "true") != "false")
+			postgresStore, err = api.NewPostgresStoreContext(ctx, env("DATABASE_URL", ""), env("DEMO_SEED_DATA", "true") != "false")
 			return err
 		})
 		cancel()
