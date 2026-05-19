@@ -24,4 +24,3 @@
 
 # Generated mTLS certificates
 certs/
-gen-mtls-certs.sh

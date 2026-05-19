@@ -1,6 +1,6 @@
 # Makefile for Gthulhu Helm Chart
 
-CHART_NAME := gthulhu
+CHART_NAME := .
 NAMESPACE := default
 RELEASE_NAME := gthulhu
 
@@ -9,8 +9,8 @@ VALUES_FILE := values.yaml
 
 # Environment specific values
 PROD_VALUES := values-production.yaml
-DEV_VALUES := values-development.yaml
-TEST_VALUES := values-testing.yaml
+DEV_VALUES := values.yaml
+TEST_VALUES := values.yaml
 
 .PHONY: help lint test install install-dev install-prod install-test upgrade uninstall clean
 
@@ -112,21 +112,21 @@ logs: ## Show logs from all components
 	@echo "=== Scheduler Logs ==="
 	kubectl logs -l app.kubernetes.io/component=scheduler --namespace $(NAMESPACE) --tail=50 || true
 	@echo ""
-	@echo "=== API Logs ==="
-	kubectl logs -l app.kubernetes.io/component=api --namespace $(NAMESPACE) --tail=50 || true
+	@echo "=== Manager Logs ==="
+	kubectl logs -l app.kubernetes.io/component=manager --namespace $(NAMESPACE) --tail=50 || true
 
 logs-dev: ## Show logs from development environment
 	@echo "📜 Showing Gthulhu development logs..."
 	kubectl logs -l app.kubernetes.io/name=gthulhu --namespace $(NAMESPACE)-dev --tail=50 || true
 
-port-forward: ## Port forward to API service
-	@echo "🔗 Port forwarding to API service (http://localhost:8080)..."
-	kubectl port-forward svc/$(RELEASE_NAME)-api 8080:80 --namespace $(NAMESPACE)
+port-forward: ## Port forward to manager service
+	@echo "🔗 Port forwarding to manager service (http://localhost:8080)..."
+	kubectl port-forward svc/$(RELEASE_NAME)-manager 8080:80 --namespace $(NAMESPACE)
 
-port-forward-dev: ## Port forward to development API service
-	@echo "🔗 Port forwarding to development API service..."
+port-forward-dev: ## Port forward to development manager service
+	@echo "🔗 Port forwarding to development manager service..."
 	kubectl get svc -n $(NAMESPACE)-dev | grep gthulhu || echo "No service found"
-	kubectl port-forward svc/$(RELEASE_NAME)-dev-api 8080:80 --namespace $(NAMESPACE)-dev
+	kubectl port-forward svc/$(RELEASE_NAME)-dev-manager 8080:80 --namespace $(NAMESPACE)-dev
 
 health-check: ## Check health of all components
 	@echo "💚 Checking Gthulhu health..."

@@ -181,10 +181,14 @@ spec:
       volumes:
         - name: keyfile-source
           secret:
-            secretName: {{ include "mongodb.fullname" . }}-keyfile
+            secretName: {{ include "mongodb.keyfileSecretName" . }}
             defaultMode: 0400
         - name: mongo-keyfile-processed
           emptyDir: {}
+        {{- if not .Values.persistence.enabled }}
+        - name: mongo-data
+          emptyDir: {}
+        {{- end }}
 
   {{- if .Values.persistence.enabled }}
   volumeClaimTemplates:
@@ -198,8 +202,5 @@ spec:
         {{- if .Values.persistence.storageClass }}
         storageClassName: {{ .Values.persistence.storageClass }}
         {{- end }}
-  {{- else }}
-      - name: mongo-data
-        emptyDir: {}
   {{- end }}
 {{- end }}

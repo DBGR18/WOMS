@@ -47,8 +47,9 @@ prometheus_triggers="$gthulhu_metrics"
 if [ "$GTHULHU_ENABLED" = "true" ]; then
   [ "$prometheus_triggers" -eq 1 ]
   [ "$gthulhu_metrics" -eq 1 ]
-  grep -Eq 'serverAddress: "http://(monitoring-kube-prometheus-prometheus.monitoring|woms-woms-prometheus.woms):9090"' "$rendered"
-  grep -Eq 'query: "avg\(rate\(gthulhu_pod_involuntary_ctx_switches_total\{(exported_namespace|namespace)=\\"woms\\",pod_name=~\\"woms-woms-worker-\.\*\\"\}\[2m\]\)\)"' "$rendered"
+  grep -Eq "serverAddress: \"http://(monitoring-kube-prometheus-prometheus.monitoring|${RELEASE}-woms-prometheus.${NAMESPACE}):9090\"" "$rendered"
+  expected_query="query: \"avg(rate(gthulhu_pod_involuntary_ctx_switches_total{exported_namespace=\\\"${NAMESPACE}\\\",pod_name=~\\\"${RELEASE}-woms-worker-.*\\\"}[2m]))\""
+  grep -Fq "$expected_query" "$rendered"
   grep -q 'threshold: "20"' "$rendered"
 else
   [ "$prometheus_triggers" -eq 0 ]

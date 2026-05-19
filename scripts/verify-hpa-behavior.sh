@@ -80,6 +80,40 @@ spec:
 EOF
 }
 
+run_worker_deployment_cpu_load() {
+  patch="$(
+    cat <<'JSON'
+[
+  {
+    "op": "add",
+    "path": "/spec/template/spec/containers/-",
+    "value": {
+      "name": "hpa-cpu-load",
+      "image": "busybox:1.36",
+      "resources": {
+        "requests": {
+          "cpu": "100m",
+          "memory": "32Mi"
+        },
+        "limits": {
+          "cpu": "1",
+          "memory": "128Mi"
+        }
+      },
+      "command": [
+        "sh",
+        "-c",
+        "while true; do sha256sum /dev/zero >/dev/null 2>&1; done"
+      ]
+    }
+  }
+]
+JSON
+  )"
+  "$KUBECTL" patch deployment "$WORKER_DEPLOY" -n "$NAMESPACE" --type=json -p "$patch"
+  "$KUBECTL" rollout status "deployment/${WORKER_DEPLOY}" -n "$NAMESPACE" --timeout=180s
+}
+
 case "$HPA_SCENARIO" in
   cpu)
     helm_upgrade \
@@ -87,7 +121,7 @@ case "$HPA_SCENARIO" in
       --set keda.cpu.enabled=true \
       --set keda.cpu.targetUtilization=10 \
       --set keda.gthulhu.enabled=false
-    run_worker_like_load_pod "${WORKER_DEPLOY}-cpu-load"
+    run_worker_deployment_cpu_load
     ;;
   kafka)
     helm_upgrade \

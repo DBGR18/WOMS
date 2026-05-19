@@ -223,9 +223,14 @@ mongodb:
   auth:
     # Existing secret name containing MONGO_INITDB_ROOT_USERNAME and MONGO_INITDB_ROOT_PASSWORD
     existingSecret: ""
-    # If existingSecret is not set, use these values
+    # If existingSecret is not set, rootPassword is generated when empty.
     rootUsername: admin
-    rootPassword: changeme
+    rootPassword: ""
+
+  # Replica set keyfile secret. If existingSecret and value are empty, a keyfile is generated.
+  keyfile:
+    existingSecret: ""
+    value: ""
   
   # Database name for manager
   database: manager

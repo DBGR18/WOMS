@@ -106,7 +106,7 @@ gthulhu:
   enabled: false
   crdNamespace:
     create: false
-    name: woms
+    name: '{{ .Release.Namespace }}'
   scheduler:
     runtimeMode: scheduler
     image:
@@ -147,15 +147,15 @@ gthulhu:
       interval: 15s
   podSchedulingMetrics:
     enabled: true
-    name: woms-worker-monitor
-    namespace: woms
+    name: '{{ include "woms.fullname" . }}-worker-monitor'
+    namespace: '{{ .Release.Namespace }}'
     labelSelectors:
       - key: app.kubernetes.io/component
         value: scheduler-worker
       - key: app.kubernetes.io/instance
-        value: woms
+        value: '{{ .Release.Name }}'
     k8sNamespaces:
-      - woms
+      - '{{ .Release.Namespace }}'
     collectionIntervalSeconds: 10
     commandRegex: ""
     metrics:
@@ -270,7 +270,7 @@ monitoring:
       gthulhu:
         enabled: true
         path: /metrics
-        service: '{{ include "woms.fullname" . }}-gthulhu-scheduler-sidecar'
+        service: '{{ .Release.Name }}-gthulhu-scheduler-sidecar'
         port: "9090"
         interval: 15s
 

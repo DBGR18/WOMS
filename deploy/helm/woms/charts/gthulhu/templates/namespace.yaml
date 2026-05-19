@@ -1,10 +1,11 @@
 {{- if .Values.crdNamespace.create }}
-{{- $existingNs := lookup "v1" "Namespace" "" .Values.crdNamespace.name }}
+{{- $namespaceName := tpl .Values.crdNamespace.name . }}
+{{- $existingNs := lookup "v1" "Namespace" "" $namespaceName }}
 {{- if not $existingNs }}
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: {{ .Values.crdNamespace.name }}
+  name: {{ $namespaceName }}
   labels:
     {{- include "gthulhu.labels" . | nindent 4 }}
     app.kubernetes.io/component: crd-namespace

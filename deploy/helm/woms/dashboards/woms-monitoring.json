@@ -495,7 +495,7 @@
       },
       "targets": [
         {
-          "expr": "avg(rate(gthulhu_pod_involuntary_ctx_switches_total{exported_namespace=\"woms\",pod_name=~\"woms-woms-worker-.*\"}[2m]))",
+          "expr": "avg(rate(gthulhu_pod_involuntary_ctx_switches_total{exported_namespace=\"__WOMS_NAMESPACE__\",pod_name=~\"__WOMS_WORKER_REGEX__\"}[2m]))",
           "legendFormat": "ctx switches/s",
           "refId": "A"
         }
@@ -548,7 +548,7 @@
       },
       "targets": [
         {
-          "expr": "avg(rate(gthulhu_pod_wait_time_nanoseconds_total{exported_namespace=\"woms\",pod_name=~\"woms-woms-worker-.*\"}[2m])) / 1000000000",
+          "expr": "avg(rate(gthulhu_pod_wait_time_nanoseconds_total{exported_namespace=\"__WOMS_NAMESPACE__\",pod_name=~\"__WOMS_WORKER_REGEX__\"}[2m])) / 1000000000",
           "legendFormat": "seconds/s",
           "refId": "A"
         }
@@ -601,7 +601,7 @@
       },
       "targets": [
         {
-          "expr": "sum(gthulhu_pod_process_count{exported_namespace=\"woms\",pod_name=~\"woms-woms-worker-.*\"})",
+          "expr": "sum(gthulhu_pod_process_count{exported_namespace=\"__WOMS_NAMESPACE__\",pod_name=~\"__WOMS_WORKER_REGEX__\"})",
           "legendFormat": "processes",
           "refId": "A"
         }

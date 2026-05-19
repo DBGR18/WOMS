@@ -15,22 +15,42 @@ data:
     scrape_configs:
       - job_name: woms-api
         metrics_path: {{ .Values.monitoring.prometheus.scrape.api.path }}
-        static_configs:
-          - targets:
-              - {{ include "woms.fullname" . }}-api:{{ .Values.monitoring.prometheus.scrape.api.port }}
-            labels:
-              service: woms-api
-              namespace: {{ .Release.Namespace }}
+        kubernetes_sd_configs:
+          - role: endpoints
+            namespaces:
+              names:
+                - {{ .Release.Namespace }}
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_name]
+            action: keep
+            regex: {{ include "woms.fullname" . }}-api
+          - source_labels: [__meta_kubernetes_endpoint_port_name]
+            action: keep
+            regex: http
+          - target_label: service
+            replacement: woms-api
+          - target_label: namespace
+            replacement: {{ .Release.Namespace }}
 
       {{- if and .Values.gthulhu.enabled .Values.monitoring.prometheus.scrape.gthulhu.enabled }}
       - job_name: gthulhu-monitor
         metrics_path: {{ .Values.monitoring.prometheus.scrape.gthulhu.path }}
         scrape_interval: {{ .Values.monitoring.prometheus.scrape.gthulhu.interval }}
-        static_configs:
-          - targets:
-              - {{ tpl .Values.monitoring.prometheus.scrape.gthulhu.service . }}:{{ .Values.monitoring.prometheus.scrape.gthulhu.port }}
-            labels:
-              service: gthulhu-monitor
-              namespace: {{ .Release.Namespace }}
+        kubernetes_sd_configs:
+          - role: endpoints
+            namespaces:
+              names:
+                - {{ .Release.Namespace }}
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_name]
+            action: keep
+            regex: {{ tpl .Values.monitoring.prometheus.scrape.gthulhu.service . }}
+          - source_labels: [__meta_kubernetes_endpoint_port_name]
+            action: keep
+            regex: monitor-metrics
+          - target_label: service
+            replacement: gthulhu-monitor
+          - target_label: namespace
+            replacement: {{ .Release.Namespace }}
       {{- end }}
 {{- end }}

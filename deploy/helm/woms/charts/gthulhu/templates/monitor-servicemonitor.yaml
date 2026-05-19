@@ -3,7 +3,7 @@ ServiceMonitor for the Gthulhu scheduling event monitor.
 Scrapes pod-level scheduling metrics exposed by the monitor's /metrics endpoint.
 These metrics are the data source for the Prometheus adapter and KEDA triggers.
 */}}
-{{- if and .Values.scheduler.enabled .Values.monitoring.enabled .Values.monitoring.serviceMonitor.enabled }}
+{{- if and .Values.scheduler.enabled .Values.scheduler.monitor.enabled .Values.monitoring.enabled .Values.monitoring.serviceMonitor.enabled }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:

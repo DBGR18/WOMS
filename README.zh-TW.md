@@ -348,6 +348,15 @@ helm upgrade --install woms ./deploy/helm/woms \
 
 ```bash
 REGISTRY=localhost:32000 PUSH=true ./scripts/build-push-gthulhu-images.sh
+helm upgrade --install woms ./deploy/helm/woms \
+  --namespace woms --create-namespace \
+  -f ./deploy/helm/woms/values-gthulhu-monitor.yaml \
+  --set gthulhu.scheduler.image.repository=localhost:32000/gthulhu-scx \
+  --set gthulhu.scheduler.image.tag=woms-integration-<gthulhu-short-sha> \
+  --set gthulhu.scheduler.sidecar.image.repository=localhost:32000/gthulhu-api \
+  --set gthulhu.scheduler.sidecar.image.tag=woms-integration-<gthulhu-short-sha> \
+  --set gthulhu.manager.image.repository=localhost:32000/gthulhu-api \
+  --set gthulhu.manager.image.tag=woms-integration-<gthulhu-short-sha>
 ```
 
 Alan integration contract：scrape path 是 `/metrics`，service 是 `woms-gthulhu-scheduler-sidecar`，port 是 `9090`。Dashboard 會包含 `Worker Involuntary Context Switch Rate`、`Worker Run Queue Wait Time Rate` 與 `Tracked Worker Process Count` panels。內建 Prometheus target 會加上自己的 `namespace` label，因此 Gthulhu 原始 pod namespace 需要用 `exported_namespace="woms"` 查詢。

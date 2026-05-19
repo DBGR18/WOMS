@@ -150,8 +150,8 @@ main() {
     echo "  helm install gthulhu . \\"
     echo "    --set scheduler.image.repository=${REGISTRY}/gthulhu \\"
     echo "    --set scheduler.image.tag=${TAG} \\"
-    echo "    --set api.image.repository=${REGISTRY}/gthulhu-api \\"
-    echo "    --set api.image.tag=${TAG}"
+    echo "    --set manager.image.repository=${REGISTRY}/gthulhu-api \\"
+    echo "    --set manager.image.tag=${TAG}"
 }
 
 main "$@"

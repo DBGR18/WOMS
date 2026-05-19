@@ -33,12 +33,10 @@ ls /sys/kernel/debug/
 ### 1. Basic Installation (Development)
 
 ```bash
-# Clone the repository
-git clone https://github.com/Gthulhu/Gthulhu.git
-cd Gthulhu/chart
+# From the Gthulhu chart directory
 
-# Install with development values (API only)
-helm install gthulhu ./gthulhu -f gthulhu/values-development.yaml
+# Install with default values
+helm install gthulhu .
 
 # Check installation
 kubectl get pods -l app.kubernetes.io/name=gthulhu
@@ -50,16 +48,16 @@ kubectl get pods -l app.kubernetes.io/name=gthulhu
 # Install with production values
 helm install gthulhu ./gthulhu -f gthulhu/values-production.yaml
 
-# Verify both scheduler and API are running
+# Verify both scheduler and manager are running
 kubectl get daemonset gthulhu-scheduler
-kubectl get deployment gthulhu-api
+kubectl get deployment gthulhu-manager
 ```
 
 ### 3. Testing Installation
 
 ```bash
-# Install with testing values
-helm install gthulhu-test ./gthulhu -f gthulhu/values-testing.yaml
+# Render a test install with default values
+helm install gthulhu-test . --dry-run --debug
 ```
 
 ## Post-Installation Verification
@@ -77,17 +75,17 @@ kubectl logs -l app.kubernetes.io/component=scheduler --tail=100
 kubectl exec -it daemonset/gthulhu-scheduler -- ls /sys/kernel/debug/
 ```
 
-### Check API Server
+### Check Manager Server
 
 ```bash
-# Verify API deployment
-kubectl get deployment gthulhu-api -o wide
+# Verify manager deployment
+kubectl get deployment gthulhu-manager -o wide
 
-# Check API logs
-kubectl logs -l app.kubernetes.io/component=api --tail=100
+# Check manager logs
+kubectl logs -l app.kubernetes.io/component=manager --tail=100
 
-# Test API health endpoint
-kubectl port-forward svc/gthulhu-api 8080:80
+# Test manager health endpoint
+kubectl port-forward svc/gthulhu-manager 8080:80
 curl http://localhost:8080/health
 ```
 
@@ -114,32 +112,29 @@ curl -X POST http://localhost:8080/api/v1/metrics \
 
 ## Common Installation Scenarios
 
-### Scenario 1: Development Environment (API Only)
+### Scenario 1: Development Environment (Manager Only)
 
 ```bash
 helm install gthulhu-dev ./gthulhu \
   --set scheduler.enabled=false \
-  --set api.service.type=NodePort
+  --set manager.service.type=NodePort
 ```
 
 ### Scenario 2: Production with Custom Domain
 
 ```bash
 helm install gthulhu ./gthulhu \
-  --set api.ingress.enabled=true \
-  --set api.ingress.hosts[0].host=gthulhu.yourdomain.com \
-  --set api.ingress.hosts[0].paths[0].path=/ \
-  --set api.ingress.hosts[0].paths[0].pathType=Prefix
+  --set ingress.enabled=true \
+  --set ingress.hosts[0].host=gthulhu.yourdomain.com \
+  --set ingress.hosts[0].paths[0].path=/ \
+  --set ingress.hosts[0].paths[0].pathType=Prefix
 ```
 
 ### Scenario 3: High Availability Setup
 
 ```bash
 helm install gthulhu ./gthulhu \
-  --set api.replicaCount=3 \
-  --set api.autoscaling.enabled=true \
-  --set api.autoscaling.minReplicas=3 \
-  --set api.autoscaling.maxReplicas=10
+  --set manager.replicaCount=3
 ```
 
 ### Scenario 4: Monitoring Enabled
@@ -163,13 +158,13 @@ helm install gthulhu ./gthulhu \
    kubectl get pods -l app.kubernetes.io/component=scheduler -o yaml | grep -i security
    ```
 
-2. **API Server Not Accessible**
+2. **Manager Server Not Accessible**
    ```bash
    # Check service
-   kubectl get svc gthulhu-api
+   kubectl get svc gthulhu-manager
    
    # Check endpoints
-   kubectl get endpoints gthulhu-api
+   kubectl get endpoints gthulhu-manager
    ```
 
 3. **Permission Denied**
@@ -185,8 +180,8 @@ helm install gthulhu ./gthulhu \
 # Scheduler logs
 kubectl logs -l app.kubernetes.io/component=scheduler -f
 
-# API logs
-kubectl logs -l app.kubernetes.io/component=api -f
+# Manager logs
+kubectl logs -l app.kubernetes.io/component=manager -f
 
 # All Gthulhu logs
 kubectl logs -l app.kubernetes.io/name=gthulhu -f

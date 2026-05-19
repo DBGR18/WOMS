@@ -64,20 +64,19 @@ The following table lists the configurable parameters and their default values:
 | `scheduler.resources.requests.cpu` | CPU request | `100m` |
 | `scheduler.resources.requests.memory` | Memory request | `128Mi` |
 
-### API Server Configuration
+### Manager Server Configuration
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `api.enabled` | Enable the metrics API server | `true` |
-| `api.replicaCount` | Number of API server replicas | `1` |
-| `api.image.repository` | API server image repository | `gthulhu-api` |
-| `api.image.tag` | API server image tag | `latest` |
-| `api.port` | API server port | `8080` |
-| `api.service.type` | Service type | `ClusterIP` |
-| `api.service.port` | Service port | `80` |
-| `api.ingress.enabled` | Enable ingress | `false` |
-| `api.healthCheck.enabled` | Enable health checks | `true` |
-| `api.autoscaling.enabled` | Enable HPA | `false` |
+| `manager.enabled` | Enable the manager server | `true` |
+| `manager.replicaCount` | Number of manager replicas | `1` |
+| `manager.image.repository` | Manager image repository | `ghcr.io/gthulhu/gthulhu-api` |
+| `manager.image.tag` | Manager image tag | `latest` |
+| `manager.port` | Manager server port | `8080` |
+| `manager.service.type` | Service type | `ClusterIP` |
+| `manager.service.port` | Service port | `80` |
+| `ingress.enabled` | Enable ingress | `false` |
+| `scheduler.sidecar.enabled` | Enable scheduler DM sidecar | `true` |
 
 ### Monitoring Configuration
 
@@ -107,21 +106,17 @@ scheduler:
       cpu: 200m
       memory: 256Mi
 
-api:
+manager:
   replicaCount: 3
-  ingress:
-    enabled: true
-    className: nginx
-    hosts:
-      - host: gthulhu-api.example.com
-        paths:
-          - path: /
-            pathType: Prefix
-  autoscaling:
-    enabled: true
-    minReplicas: 2
-    maxReplicas: 10
-    targetCPUUtilizationPercentage: 70
+
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: gthulhu-manager.example.com
+      paths:
+        - path: /
+          pathType: Prefix
 
 monitoring:
   enabled: true
@@ -133,14 +128,14 @@ monitoring:
 helm install gthulhu ./gthulhu -f production-values.yaml
 ```
 
-### Development Installation (API only)
+### Development Installation (manager only)
 
 ```yaml
 # dev-values.yaml
 scheduler:
   enabled: false
 
-api:
+manager:
   enabled: true
   service:
     type: NodePort
@@ -150,19 +145,19 @@ api:
 helm install gthulhu-dev ./gthulhu -f dev-values.yaml
 ```
 
-## Accessing the API
+## Accessing the Manager
 
 ### Using port-forward (ClusterIP)
 
 ```bash
-kubectl port-forward svc/gthulhu-api 8080:80
+kubectl port-forward svc/gthulhu-manager 8080:80
 curl http://localhost:8080/health
 ```
 
 ### Using NodePort
 
 ```bash
-export NODE_PORT=$(kubectl get svc gthulhu-api -o jsonpath='{.spec.ports[0].nodePort}')
+export NODE_PORT=$(kubectl get svc gthulhu-manager -o jsonpath='{.spec.ports[0].nodePort}')
 export NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[0].address}')
 curl http://$NODE_IP:$NODE_PORT/health
 ```
@@ -170,7 +165,7 @@ curl http://$NODE_IP:$NODE_PORT/health
 ### Using Ingress
 
 ```bash
-curl http://gthulhu-api.example.com/health
+curl http://gthulhu-manager.example.com/health
 ```
 
 ## API Endpoints
@@ -194,12 +189,12 @@ kubectl get daemonset gthulhu-scheduler
 kubectl logs -l app.kubernetes.io/component=scheduler
 ```
 
-### API Server Issues
+### Manager Server Issues
 
-Check API server logs:
+Check manager server logs:
 
 ```bash
-kubectl logs -l app.kubernetes.io/component=api
+kubectl logs -l app.kubernetes.io/component=manager
 ```
 
 ### Common Issues
@@ -323,9 +318,8 @@ helm install gthulhu ./gthulhu \
 
 ### Certificate Rotation
 
-Because the ConfigMap and the scheduler mTLS config Secret are created with
-`immutable: true`, you must use `helm upgrade --force` (which deletes and
-recreates immutable resources) when rotating certificates:
+Because the scheduler mTLS config Secret is created with `immutable: true`,
+use `helm upgrade --force` when rotating certificates:
 
 ```bash
 helm upgrade gthulhu ./gthulhu --force \

@@ -67,3 +67,14 @@ MongoDB auth secret name
 {{- include "mongodb.fullname" . }}-auth
 {{- end }}
 {{- end }}
+
+{{/*
+MongoDB replica set keyfile secret name
+*/}}
+{{- define "mongodb.keyfileSecretName" -}}
+{{- if .Values.keyfile.existingSecret }}
+{{- .Values.keyfile.existingSecret }}
+{{- else }}
+{{- include "mongodb.fullname" . }}-keyfile
+{{- end }}
+{{- end }}

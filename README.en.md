@@ -345,6 +345,15 @@ If Docker Hub credentials are unavailable, use the MicroK8s registry instead:
 
 ```bash
 REGISTRY=localhost:32000 PUSH=true ./scripts/build-push-gthulhu-images.sh
+helm upgrade --install woms ./deploy/helm/woms \
+  --namespace woms --create-namespace \
+  -f ./deploy/helm/woms/values-gthulhu-monitor.yaml \
+  --set gthulhu.scheduler.image.repository=localhost:32000/gthulhu-scx \
+  --set gthulhu.scheduler.image.tag=woms-integration-<gthulhu-short-sha> \
+  --set gthulhu.scheduler.sidecar.image.repository=localhost:32000/gthulhu-api \
+  --set gthulhu.scheduler.sidecar.image.tag=woms-integration-<gthulhu-short-sha> \
+  --set gthulhu.manager.image.repository=localhost:32000/gthulhu-api \
+  --set gthulhu.manager.image.tag=woms-integration-<gthulhu-short-sha>
 ```
 
 Alan integration contract: scrape path `/metrics`, service `woms-gthulhu-scheduler-sidecar`, port `9090`. The dashboard includes `Worker Involuntary Context Switch Rate`, `Worker Run Queue Wait Time Rate`, and `Tracked Worker Process Count` panels. The bundled Prometheus target adds its own `namespace` label, so Gthulhu's original pod namespace is queried as `exported_namespace="woms"`.

@@ -32,14 +32,14 @@ gthulhu:
       interval: 15s
   podSchedulingMetrics:
     enabled: true
-    namespace: woms
+    namespace: '{{ .Release.Namespace }}'
     k8sNamespaces:
-      - woms
+      - '{{ .Release.Namespace }}'
     labelSelectors:
       - key: app.kubernetes.io/component
         value: scheduler-worker
       - key: app.kubernetes.io/instance
-        value: woms
+        value: '{{ .Release.Name }}'
 
 keda:
   enabled: true
@@ -49,11 +49,11 @@ keda:
     enabled: true
   gthulhu:
     enabled: true
-    prometheusServerAddress: "http://woms-woms-prometheus.woms:9090"
+    prometheusServerAddress: "http://{{ include \"woms.fullname\" . }}-prometheus.{{ .Release.Namespace }}:9090"
     metricName: woms_worker_gthulhu_involuntary_ctx_switches_rate
     threshold: "20"
     query: |-
-      avg(rate(gthulhu_pod_involuntary_ctx_switches_total{exported_namespace="woms",pod_name=~"woms-woms-worker-.*"}[2m]))
+      avg(rate(gthulhu_pod_involuntary_ctx_switches_total{exported_namespace="{{ .Release.Namespace }}",pod_name=~"{{ include "woms.fullname" . }}-worker-.*"}[2m]))
 
 monitoring:
   enabled: true
@@ -63,7 +63,7 @@ monitoring:
       gthulhu:
         enabled: true
         path: /metrics
-        service: woms-gthulhu-scheduler-sidecar
+        service: '{{ .Release.Name }}-gthulhu-scheduler-sidecar'
         port: "9090"
         interval: 15s
   grafana:

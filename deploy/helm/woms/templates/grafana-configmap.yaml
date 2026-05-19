@@ -49,6 +49,7 @@ metadata:
 data:
   {{- range $path, $bytes := .Files.Glob "dashboards/*.json" }}
   {{ $path | base }}: |-
-    {{ $.Files.Get $path | nindent 4 }}
+    {{- $dashboard := $.Files.Get $path | replace "__WOMS_NAMESPACE__" $.Release.Namespace | replace "__WOMS_WORKER_REGEX__" (printf "%s-worker-.*" (include "woms.fullname" $)) }}
+    {{ $dashboard | nindent 4 }}
   {{- end }}
 {{- end }}
