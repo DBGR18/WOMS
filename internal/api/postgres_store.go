@@ -408,11 +408,11 @@ func (s *PostgresStore) DeleteOrders(req deleteOrdersRequest, claims auth.Claims
 	revisions := map[string]bool{}
 	for _, id := range req.OrderIDs {
 		order, err := s.order(id)
-		if errors.Is(err, sql.ErrNoRows) || strings.Contains(err.Error(), "找不到") {
-			result.SkippedOrderIDs = append(result.SkippedOrderIDs, id)
-			continue
-		}
 		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) || strings.Contains(err.Error(), "找不到") || strings.Contains(err.Error(), "order not found") {
+				result.SkippedOrderIDs = append(result.SkippedOrderIDs, id)
+				continue
+			}
 			return deleteOrdersResponse{}, err
 		}
 		if claims.Role == domain.RoleSales && order.CreatedBy != claims.Subject {
