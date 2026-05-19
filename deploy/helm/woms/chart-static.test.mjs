@@ -9,6 +9,14 @@ const apiDeployment = readFileSync(new URL("./templates/api-deployment.yaml", im
 const workerDeployment = readFileSync(new URL("./templates/worker-deployment.yaml", import.meta.url), "utf8");
 const webDeployment = readFileSync(new URL("./templates/web-deployment.yaml", import.meta.url), "utf8");
 const services = readFileSync(new URL("./templates/services.yaml", import.meta.url), "utf8");
+const prometheusConfig = readFileSync(new URL("./templates/prometheus-configmap.yaml", import.meta.url), "utf8");
+const grafanaConfig = readFileSync(new URL("./templates/grafana-configmap.yaml", import.meta.url), "utf8");
+const gthulhuPsm = readFileSync(new URL("./templates/gthulhu-podschedulingmetrics.yaml", import.meta.url), "utf8");
+const gthulhuOverlay = readFileSync(new URL("./values-gthulhu-monitor.yaml", import.meta.url), "utf8");
+const dashboard = readFileSync(new URL("./dashboards/woms-monitoring.json", import.meta.url), "utf8");
+const mongodbStatefulSet = readFileSync(new URL("./charts/gthulhu/charts/mongodb/templates/statefulset.yaml", import.meta.url), "utf8");
+const mtlsCertScript = readFileSync(new URL("./charts/gthulhu/gen-mtls-certs.sh", import.meta.url), "utf8");
+const gthulhuMonitoringScript = readFileSync(new URL("../../../scripts/verify-gthulhu-monitoring.sh", import.meta.url), "utf8");
 const kafkaTopicJob = readFileSync(new URL("./templates/kafka-topic-job.yaml", import.meta.url), "utf8");
 const secret = readFileSync(new URL("./templates/secret.yaml", import.meta.url), "utf8");
 const notes = readFileSync(new URL("./templates/NOTES.txt", import.meta.url), "utf8");
@@ -33,6 +41,9 @@ test("Helm values keep async scheduling and HPA demo defaults wired", () => {
   assert.match(values, /lagThreshold:\s+"10"/);
   assert.match(values, /targetUtilization:\s+"70"/);
   assert.match(values, /gthulhu:[\s\S]*enabled:\s+false/);
+  assert.match(values, /scheduler:[\s\S]*runtimeMode:\s+scheduler/);
+  assert.match(values, /mode:\s+none/);
+  assert.match(values, /monitor:[\s\S]*enableCRDWatcher:\s+true/);
   assert.match(values, /prometheusServerAddress:\s+"http:\/\/monitoring-kube-prometheus-prometheus\.monitoring:9090"/);
   assert.match(values, /metricName:\s+woms_worker_gthulhu_involuntary_ctx_switches_rate/);
   assert.match(values, /threshold:\s+"20"/);
@@ -48,12 +59,67 @@ test("Helm chart deploys required platform dependencies by default", () => {
   assert.match(chart, /condition:\s+redis\.enabled/);
   assert.match(chart, /name:\s+kafka/);
   assert.match(chart, /condition:\s+kafka\.enabled/);
+  assert.match(chart, /name:\s+gthulhu/);
+  assert.match(chart, /repository:\s+file:\/\/charts\/gthulhu/);
+  assert.match(chart, /condition:\s+gthulhu\.enabled/);
   assert.match(values, /postgresql:[\s\S]*enabled:\s+true/);
   assert.match(values, /fullnameOverride:\s+postgres/);
   assert.match(values, /redis:[\s\S]*enabled:\s+true/);
   assert.match(values, /fullnameOverride:\s+redis/);
   assert.match(values, /kafka:[\s\S]*enabled:\s+true/);
   assert.match(values, /fullnameOverride:\s+kafka/);
+});
+
+test("Gthulhu monitor overlay enables monitor-only umbrella deployment", () => {
+  assert.match(gthulhuOverlay, /gthulhu:[\s\S]*enabled:\s+true/);
+  assert.match(gthulhuOverlay, /runtimeMode:\s+scheduler/);
+  assert.match(gthulhuOverlay, /mode:\s+none/);
+  assert.match(gthulhuOverlay, /nameSuffix:\s+woms-poc/);
+  assert.match(gthulhuOverlay, /monitorAll:\s+true/);
+  assert.match(gthulhuOverlay, /repository:\s+docker\.io\/d11nn\/gthulhu-scx/);
+  assert.match(gthulhuOverlay, /tag:\s+"vX\.Y\.Z"/);
+  assert.match(gthulhuOverlay, /keda:[\s\S]*kafka:[\s\S]*enabled:\s+true/);
+  assert.match(gthulhuOverlay, /keda:[\s\S]*cpu:[\s\S]*enabled:\s+true/);
+  assert.match(gthulhuOverlay, /keda:[\s\S]*gthulhu:[\s\S]*enabled:\s+true/);
+  assert.match(gthulhuOverlay, /prometheusServerAddress:\s+"http:\/\/\{\{ include \\"woms\.fullname\\" \. \}\}-prometheus\.\{\{ \.Release\.Namespace \}\}:9090"/);
+  assert.match(gthulhuOverlay, /gthulhu_pod_involuntary_ctx_switches_total\{exported_namespace="\{\{ \.Release\.Namespace \}\}",pod_name=~"\{\{ include "woms\.fullname" \. \}\}-worker-\.\*"\}/);
+});
+
+test("Alan monitoring templates scrape WOMS and Gthulhu metrics", () => {
+  assert.match(prometheusConfig, /job_name:\s+woms-api/);
+  assert.match(prometheusConfig, /job_name:\s+gthulhu-monitor/);
+  assert.match(prometheusConfig, /if and \.Values\.gthulhu\.enabled \.Values\.gthulhu\.scheduler\.monitor\.enabled \.Values\.monitoring\.prometheus\.scrape\.gthulhu\.enabled/);
+  assert.match(prometheusConfig, /kubernetes_sd_configs:/);
+  assert.match(prometheusConfig, /tpl \.Values\.monitoring\.prometheus\.scrape\.gthulhu\.service \./);
+  assert.match(grafanaConfig, /\.Files\.Glob "dashboards\/\*\.json"/);
+  assert.match(grafanaConfig, /replace "__WOMS_NAMESPACE__" \$\.Release\.Namespace/);
+  assert.match(grafanaConfig, /replace "__WOMS_WORKER_REGEX__"/);
+  assert.match(dashboard, /Worker Involuntary Context Switch Rate/);
+  assert.match(dashboard, /Worker Run Queue Wait Time Rate/);
+  assert.match(dashboard, /Tracked Worker Process Count/);
+  assert.match(dashboard, /gthulhu_pod_involuntary_ctx_switches_total\{exported_namespace=\\"__WOMS_NAMESPACE__\\",pod_name=~\\"__WOMS_WORKER_REGEX__\\"\}/);
+  assert.match(dashboard, /gthulhu_pod_wait_time_nanoseconds_total\{exported_namespace=\\"__WOMS_NAMESPACE__\\",pod_name=~\\"__WOMS_WORKER_REGEX__\\"\}/);
+  assert.match(dashboard, /gthulhu_pod_process_count\{exported_namespace=\\"__WOMS_NAMESPACE__\\",pod_name=~\\"__WOMS_WORKER_REGEX__\\"\}/);
+});
+
+test("PodSchedulingMetrics selector targets WOMS workers", () => {
+  assert.match(gthulhuPsm, /kind:\s+PodSchedulingMetrics/);
+  assert.match(gthulhuPsm, /if and \.Values\.gthulhu\.enabled \.Values\.gthulhu\.podSchedulingMetrics\.enabled/);
+  assert.match(gthulhuPsm, /tpl \.Values\.gthulhu\.podSchedulingMetrics\.name \./);
+  assert.match(values, /podSchedulingMetrics:[\s\S]*labelSelectors:[\s\S]*key:\s+app\.kubernetes\.io\/component[\s\S]*value:\s+scheduler-worker/);
+  assert.match(values, /key:\s+app\.kubernetes\.io\/instance[\s\S]*value:\s+'\{\{ \.Release\.Name \}\}'/);
+});
+
+test("Gthulhu helper scripts quote user-controlled data safely", () => {
+  assert.match(mongodbStatefulSet, /process\.env\.MONGO_ROOT_USERNAME/);
+  assert.match(mongodbStatefulSet, /process\.env\.MONGO_ROOT_PASSWORD/);
+  assert.doesNotMatch(mongodbStatefulSet, /db\.getUser\('"\$MONGO_ROOT_USERNAME"'\)/);
+  assert.doesNotMatch(mongodbStatefulSet, /pwd:\s+'"\$MONGO_ROOT_PASSWORD"'/);
+  assert.doesNotMatch(mongodbStatefulSet, /chown 999:999/);
+  assert.match(mongodbStatefulSet, /defaultMode:\s+0440/);
+  assert.match(mtlsCertScript, /umask 077/);
+  assert.match(mtlsCertScript, /printf '%s\\n%s\\n'/);
+  assert.match(gthulhuMonitoringScript, /curl -fsS -G --data-urlencode "query=\$1"/);
 });
 
 test("Default Docker image tags use v-prefixed release tags", () => {
@@ -81,7 +147,7 @@ test("KEDA ScaledObject template points at scheduler worker backlog", () => {
   assert.match(scaledObject, /metricType:\s+Utilization/);
   assert.match(scaledObject, /if \.Values\.keda\.gthulhu\.enabled/);
   assert.match(scaledObject, /type:\s+prometheus/);
-  assert.match(scaledObject, /serverAddress:\s+\{\{ \.Values\.keda\.gthulhu\.prometheusServerAddress \| quote \}\}/);
+  assert.match(scaledObject, /serverAddress:\s+\{\{ tpl \.Values\.keda\.gthulhu\.prometheusServerAddress \. \| quote \}\}/);
   assert.match(scaledObject, /metricName:\s+\{\{ \.Values\.keda\.gthulhu\.metricName \| quote \}\}/);
   assert.match(scaledObject, /query:\s+\{\{ tpl \.Values\.keda\.gthulhu\.query \. \| quote \}\}/);
   assert.match(scaledObject, /threshold:\s+\{\{ \.Values\.keda\.gthulhu\.threshold \| quote \}\}/);
