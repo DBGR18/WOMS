@@ -9,7 +9,7 @@ api:
     minAvailable: 1
   image:
     repository: woms-api
-    tag: v0.1.37
+    tag: v0.1.38
   jwtSecret: ""
   env:
     store: postgres
@@ -33,7 +33,7 @@ worker:
   replicaCount: 1
   image:
     repository: woms-scheduler-worker
-    tag: v0.1.37
+    tag: v0.1.38
   env:
     databaseUrl: postgres://woms:woms@postgres:5432/woms?sslmode=disable
     minJobDurationMs: "0"
@@ -54,7 +54,7 @@ web:
     minAvailable: 1
   image:
     repository: woms-web
-    tag: v0.1.37
+    tag: v0.1.38
   resources:
     requests:
       cpu: 50m
