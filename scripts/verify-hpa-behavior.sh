@@ -12,9 +12,16 @@ TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-360}"
 GTHULHU_IMAGE_TAG="${GTHULHU_IMAGE_TAG:-woms-integration-f71f78a}"
 WORKER_DEPLOY="${RELEASE}-woms-worker"
 LOAD_LABEL="app=woms-hpa-load,scenario=${HPA_SCENARIO}"
+NEEDS_RESTORE=false
 
 cleanup() {
   "$KUBECTL" delete job,pod -n "$NAMESPACE" -l "$LOAD_LABEL" --ignore-not-found=true >/dev/null 2>&1 || true
+  if [ "$NEEDS_RESTORE" = "true" ]; then
+    helm_upgrade \
+      --set keda.kafka.enabled=true \
+      --set keda.cpu.enabled=true \
+      --set keda.gthulhu.enabled=true >/dev/null 2>&1 || true
+  fi
 }
 trap cleanup EXIT
 
@@ -111,6 +118,7 @@ run_worker_deployment_cpu_load() {
 JSON
   )"
   "$KUBECTL" patch deployment "$WORKER_DEPLOY" -n "$NAMESPACE" --type=json -p "$patch"
+  NEEDS_RESTORE=true
   "$KUBECTL" rollout status "deployment/${WORKER_DEPLOY}" -n "$NAMESPACE" --timeout=180s
 }
 
@@ -157,6 +165,8 @@ helm_upgrade \
   --set keda.kafka.enabled=true \
   --set keda.cpu.enabled=true \
   --set keda.gthulhu.enabled=true
+"$KUBECTL" rollout status "deployment/${WORKER_DEPLOY}" -n "$NAMESPACE" --timeout=180s
+NEEDS_RESTORE=false
 wait_replicas 1 le
 
 echo "HPA ${HPA_SCENARIO} behavior verification passed"

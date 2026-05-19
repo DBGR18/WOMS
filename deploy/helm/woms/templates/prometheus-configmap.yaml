@@ -32,7 +32,7 @@ data:
           - target_label: namespace
             replacement: {{ .Release.Namespace }}
 
-      {{- if and .Values.gthulhu.enabled .Values.monitoring.prometheus.scrape.gthulhu.enabled }}
+      {{- if and .Values.gthulhu.enabled .Values.gthulhu.scheduler.monitor.enabled .Values.monitoring.prometheus.scrape.gthulhu.enabled }}
       - job_name: gthulhu-monitor
         metrics_path: {{ .Values.monitoring.prometheus.scrape.gthulhu.path }}
         scrape_interval: {{ .Values.monitoring.prometheus.scrape.gthulhu.interval }}

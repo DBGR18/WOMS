@@ -85,6 +85,7 @@ test("Gthulhu monitor overlay enables monitor-only umbrella deployment", () => {
 test("Alan monitoring templates scrape WOMS and Gthulhu metrics", () => {
   assert.match(prometheusConfig, /job_name:\s+woms-api/);
   assert.match(prometheusConfig, /job_name:\s+gthulhu-monitor/);
+  assert.match(prometheusConfig, /if and \.Values\.gthulhu\.enabled \.Values\.gthulhu\.scheduler\.monitor\.enabled \.Values\.monitoring\.prometheus\.scrape\.gthulhu\.enabled/);
   assert.match(prometheusConfig, /kubernetes_sd_configs:/);
   assert.match(prometheusConfig, /tpl \.Values\.monitoring\.prometheus\.scrape\.gthulhu\.service \./);
   assert.match(grafanaConfig, /\.Files\.Glob "dashboards\/\*\.json"/);
