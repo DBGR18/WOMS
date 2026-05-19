@@ -1,0 +1,36 @@
+{{- if and .Values.monitoring.enabled .Values.monitoring.prometheus.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "woms.fullname" . }}-prometheus
+  labels:
+    {{- include "woms.labels" . | nindent 4 }}
+    app.kubernetes.io/component: prometheus
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: {{ .Values.monitoring.prometheus.scrape.api.interval }}
+      evaluation_interval: 15s
+
+    scrape_configs:
+      - job_name: woms-api
+        metrics_path: {{ .Values.monitoring.prometheus.scrape.api.path }}
+        static_configs:
+          - targets:
+              - {{ include "woms.fullname" . }}-api:{{ .Values.monitoring.prometheus.scrape.api.port }}
+            labels:
+              service: woms-api
+              namespace: {{ .Release.Namespace }}
+
+      {{- if and .Values.gthulhu.enabled .Values.monitoring.prometheus.scrape.gthulhu.enabled }}
+      - job_name: gthulhu-monitor
+        metrics_path: {{ .Values.monitoring.prometheus.scrape.gthulhu.path }}
+        scrape_interval: {{ .Values.monitoring.prometheus.scrape.gthulhu.interval }}
+        static_configs:
+          - targets:
+              - {{ tpl .Values.monitoring.prometheus.scrape.gthulhu.service . }}:{{ .Values.monitoring.prometheus.scrape.gthulhu.port }}
+            labels:
+              service: gthulhu-monitor
+              namespace: {{ .Release.Namespace }}
+      {{- end }}
+{{- end }}

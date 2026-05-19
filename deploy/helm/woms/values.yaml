@@ -102,6 +102,70 @@ keda:
     query: |-
       avg(rate(gthulhu_pod_involuntary_ctx_switches_total{exported_namespace="{{ .Release.Namespace }}",pod_name=~"{{ include "woms.fullname" . }}-worker-.*"}[2m]))
 
+gthulhu:
+  enabled: false
+  crdNamespace:
+    create: false
+    name: woms
+  scheduler:
+    runtimeMode: scheduler
+    image:
+      repository: docker.io/d11nn/gthulhu-scx
+      pullPolicy: IfNotPresent
+      tag: "vX.Y.Z"
+    sidecar:
+      enabled: false
+    config:
+      mode: none
+      kernelMode: false
+      maxTimeWatchdog: false
+      earlyProcessing: false
+      builtinIdle: false
+    monitor:
+      enabled: true
+      bpfObjectPath: /gthulhu/sched_monitor.bpf.o
+      collectionIntervalSec: 10
+      monitorAll: false
+      streamEvents: false
+      prometheusPort: 9090
+      enableCRDWatcher: true
+      kubeConfigPath: ""
+    api:
+      enabled: false
+      authEnabled: false
+      interval: 5
+  manager:
+    enabled: false
+  mongodb:
+    enabled: false
+  monitoring:
+    enabled: true
+    path: /metrics
+    serviceMonitor:
+      enabled: false
+      labels: {}
+      interval: 15s
+  podSchedulingMetrics:
+    enabled: true
+    name: woms-worker-monitor
+    namespace: woms
+    labelSelectors:
+      - key: app.kubernetes.io/component
+        value: scheduler-worker
+      - key: app.kubernetes.io/instance
+        value: woms
+    k8sNamespaces:
+      - woms
+    collectionIntervalSeconds: 10
+    commandRegex: ""
+    metrics:
+      voluntaryCtxSwitches: true
+      involuntaryCtxSwitches: true
+      cpuTimeNs: true
+      waitTimeNs: true
+      runCount: true
+      cpuMigrations: true
+
 postgresql:
   enabled: true
   fullnameOverride: postgres
@@ -190,32 +254,12 @@ kafkaTopic:
 monitoring:
   enabled: true
 
-  # Gthulhu: infrastructure metrics agent (Postgres, Redis, Kafka, K8s)
-  # gthulhu:
-  #   enabled: true
-  #   image:
-  #     repository: ghcr.io/gthulhu/gthulhu
-  #     tag: latest
-  #     pullPolicy: IfNotPresent
-  #   metricsPort: 9091
-  #   env:
-  #     postgresDsn: postgres://woms:woms@postgres:5432/woms?sslmode=disable
-  #     redisAddr: redis-master:6379
-  #     kafkaBrokers: kafka:9092
-  #   resources:
-  #     requests:
-  #       cpu: 50m
-  #       memory: 64Mi
-  #     limits:
-  #       cpu: 200m
-  #       memory: 128Mi
-
   # Prometheus scrape annotations (ServiceMonitor or pod annotations)
   prometheus:
     enabled: true
     image:
       repository: prom/prometheus
-      tag: "2.53.0"
+      tag: "v2.53.0"
     scrape:
       # API pods: scrape /metrics on port 8080
       api:
@@ -223,10 +267,12 @@ monitoring:
         port: "8080"
         interval: 15s
       # Gthulhu pods: scrape /metrics on port 9091
-      # gthulhu:
-      #   path: /metrics
-      #   port: "9091"
-      #   interval: 15s
+      gthulhu:
+        enabled: true
+        path: /metrics
+        service: '{{ include "woms.fullname" . }}-gthulhu-scheduler-sidecar'
+        port: "9090"
+        interval: 15s
 
   # Grafana deployment with anonymous viewer access for iframe embedding
   grafana:
