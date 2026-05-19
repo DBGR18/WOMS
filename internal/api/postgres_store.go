@@ -152,7 +152,7 @@ func (s *PostgresStore) CreateOrder(req createOrderRequest, actorID string) (dom
 		return domain.Order{}, err
 	}
 	now := time.Now().UTC()
-	id := "ORD-" + strconv.FormatInt(now.UnixNano(), 10)
+	id := orderIDFromTime(now)
 	order := domain.Order{
 		ID:        id,
 		Customer:  req.Customer,
