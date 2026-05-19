@@ -126,10 +126,13 @@ test("Gthulhu helper scripts quote user-controlled data safely", () => {
 });
 
 test("HPA behavior CPU scenario removes its injected load sidecar during cleanup", () => {
+  assert.match(hpaBehaviorScript, /RESTORE_HELM=false/);
+  assert.match(hpaBehaviorScript, /CPU_LOAD_INJECTED=false/);
   assert.match(hpaBehaviorScript, /remove_worker_deployment_cpu_load\(\)/);
   assert.match(hpaBehaviorScript, /"name": "hpa-cpu-load"/);
   assert.match(hpaBehaviorScript, /"\$patch": "delete"/);
   assert.match(hpaBehaviorScript, /rollout status "deployment\/\$\{WORKER_DEPLOY\}"/);
+  assert.match(hpaBehaviorScript, /if \[ "\$RESTORE_HELM" = "true" \]/);
 });
 
 test("Default Docker image tags use v-prefixed release tags", () => {

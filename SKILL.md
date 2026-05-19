@@ -19,15 +19,17 @@ API 與 worker 的啟動流程原本只做單次 PostgreSQL/Kafka readiness chec
 
 - 在 `scripts/verify-hpa-behavior.sh` 加入 idempotent cleanup guard。
 - 新增 `remove_worker_deployment_cpu_load`，用 strategic merge patch 刪除 `hpa-cpu-load` sidecar，並等待 worker rollout 完成。
-- API 啟動時對 PostgreSQL store 與 Kafka broker TCP readiness 做 bounded retry/backoff。
-- Scheduler worker 啟動時對 PostgreSQL `PingContext` 與 Kafka broker TCP readiness 做 bounded retry/backoff。
+- 將 startup retry 與 TCP readiness helper 抽到 `internal/startup`，避免 API 與 worker 兩份實作 drift。
+- API 啟動時對 PostgreSQL store 與 Kafka broker TCP readiness 做 bounded retry/backoff；Kafka readiness 會嘗試所有設定的 brokers，只要任一 broker 可連即通過。
+- Scheduler worker 啟動時對 PostgreSQL `PingContext` 與 Kafka broker TCP readiness 做 bounded retry/backoff；Kafka reader 也使用 trim 後的 broker 清單。
+- HPA cleanup 分離 Helm restore 與 CPU sidecar cleanup flags，讓 Kafka/Gthulhu scenario 若提早失敗也會還原 scenario-specific Helm values。
 - Helm chart 新增 retry env defaults：
   - `API_DEPENDENCY_RETRY_TIMEOUT_MS`
   - `API_DEPENDENCY_RETRY_INTERVAL_MS`
   - `WORKER_DEPENDENCY_RETRY_TIMEOUT_MS`
   - `WORKER_DEPENDENCY_RETRY_INTERVAL_MS`
 - README / README.en.md / README.zh-TW.md 補上 dependency retry 設定說明。
-- 增加 Go tests 與 Helm static tests，覆蓋 retry helper 與 HPA cleanup 行為。
+- 增加 Go tests 與 Helm static tests，覆蓋 shared retry helper、Kafka broker readiness 與 HPA cleanup 行為。
 
 ### Validation
 
@@ -69,15 +71,17 @@ API and worker startup previously performed only one PostgreSQL/Kafka readiness 
 
 - Add an idempotent cleanup guard to `scripts/verify-hpa-behavior.sh`.
 - Add `remove_worker_deployment_cpu_load`, using strategic merge patch to delete the `hpa-cpu-load` sidecar and wait for worker rollout.
-- Add bounded startup retry/backoff for API PostgreSQL store and Kafka broker TCP readiness.
-- Add bounded startup retry/backoff for scheduler-worker PostgreSQL `PingContext` and Kafka broker TCP readiness.
+- Move startup retry and TCP readiness helpers into `internal/startup` so API and worker behavior cannot drift.
+- Add bounded startup retry/backoff for API PostgreSQL store and Kafka broker TCP readiness; Kafka readiness now tries all configured brokers and succeeds if any broker is reachable.
+- Add bounded startup retry/backoff for scheduler-worker PostgreSQL `PingContext` and Kafka broker TCP readiness; the Kafka reader also uses the trimmed broker list.
+- Split HPA cleanup into Helm restore and CPU sidecar cleanup flags so Kafka/Gthulhu scenarios restore scenario-specific Helm values even when they exit early.
 - Add Helm retry env defaults:
   - `API_DEPENDENCY_RETRY_TIMEOUT_MS`
   - `API_DEPENDENCY_RETRY_INTERVAL_MS`
   - `WORKER_DEPENDENCY_RETRY_TIMEOUT_MS`
   - `WORKER_DEPENDENCY_RETRY_INTERVAL_MS`
 - Document the dependency retry settings in README / README.en.md / README.zh-TW.md.
-- Add Go tests and Helm static tests for retry helpers and HPA cleanup behavior.
+- Add Go tests and Helm static tests for the shared retry helper, Kafka broker readiness, and HPA cleanup behavior.
 
 ### Validation
 

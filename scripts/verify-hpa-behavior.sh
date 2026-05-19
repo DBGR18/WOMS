@@ -12,7 +12,8 @@ TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-360}"
 GTHULHU_IMAGE_TAG="${GTHULHU_IMAGE_TAG:-woms-integration-f71f78a}"
 WORKER_DEPLOY="${RELEASE}-woms-worker"
 LOAD_LABEL="app=woms-hpa-load,scenario=${HPA_SCENARIO}"
-NEEDS_RESTORE=false
+RESTORE_HELM=false
+CPU_LOAD_INJECTED=false
 CLEANED_UP=false
 
 cleanup() {
@@ -21,8 +22,10 @@ cleanup() {
   fi
   CLEANED_UP=true
   "$KUBECTL" delete job,pod -n "$NAMESPACE" -l "$LOAD_LABEL" --ignore-not-found=true >/dev/null 2>&1 || true
-  if [ "$NEEDS_RESTORE" = "true" ]; then
+  if [ "$CPU_LOAD_INJECTED" = "true" ]; then
     remove_worker_deployment_cpu_load >/dev/null 2>&1 || true
+  fi
+  if [ "$RESTORE_HELM" = "true" ]; then
     helm_upgrade \
       --set keda.kafka.enabled=true \
       --set keda.cpu.enabled=true \
@@ -124,7 +127,7 @@ run_worker_deployment_cpu_load() {
 JSON
   )"
   "$KUBECTL" patch deployment "$WORKER_DEPLOY" -n "$NAMESPACE" --type=json -p "$patch"
-  NEEDS_RESTORE=true
+  CPU_LOAD_INJECTED=true
   "$KUBECTL" rollout status "deployment/${WORKER_DEPLOY}" -n "$NAMESPACE" --timeout=180s
 }
 
@@ -149,6 +152,7 @@ remove_worker_deployment_cpu_load() {
 
 case "$HPA_SCENARIO" in
   cpu)
+    RESTORE_HELM=true
     helm_upgrade \
       --set keda.kafka.enabled=false \
       --set keda.cpu.enabled=true \
@@ -157,6 +161,7 @@ case "$HPA_SCENARIO" in
     run_worker_deployment_cpu_load
     ;;
   kafka)
+    RESTORE_HELM=true
     helm_upgrade \
       --set keda.kafka.enabled=true \
       --set keda.kafka.lagThreshold=1 \
@@ -169,6 +174,7 @@ case "$HPA_SCENARIO" in
     "$KUBECTL" label job "woms-hpa-kafka-load" -n "$NAMESPACE" app=woms-hpa-load "scenario=${HPA_SCENARIO}" --overwrite
     ;;
   gthulhu)
+    RESTORE_HELM=true
     helm_upgrade \
       --set keda.kafka.enabled=false \
       --set keda.cpu.enabled=false \
@@ -192,7 +198,8 @@ helm_upgrade \
   --set keda.cpu.enabled=true \
   --set keda.gthulhu.enabled=true
 "$KUBECTL" rollout status "deployment/${WORKER_DEPLOY}" -n "$NAMESPACE" --timeout=180s
-NEEDS_RESTORE=false
+RESTORE_HELM=false
+CPU_LOAD_INJECTED=false
 wait_replicas 1 le
 
 echo "HPA ${HPA_SCENARIO} behavior verification passed"

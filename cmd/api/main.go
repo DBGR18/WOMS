@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -12,6 +10,7 @@ import (
 	"time"
 
 	"github.com/d11nn/woms/internal/api"
+	"github.com/d11nn/woms/internal/startup"
 )
 
 func main() {
@@ -23,7 +22,7 @@ func main() {
 	if env("API_STORE", "memory") == "postgres" {
 		ctx, cancel := context.WithTimeout(context.Background(), dependencyTimeout)
 		var postgresStore *api.PostgresStore
-		err := retryDependency(ctx, "postgres store", dependencyInterval, func(context.Context) error {
+		err := startup.RetryDependency(ctx, "postgres store", dependencyInterval, log.Printf, func(context.Context) error {
 			var err error
 			postgresStore, err = api.NewPostgresStore(env("DATABASE_URL", ""), env("DEMO_SEED_DATA", "true") != "false")
 			return err
@@ -43,10 +42,10 @@ func main() {
 	}
 	publisher := api.ScheduleJobPublisher(api.NoopScheduleJobPublisher{})
 	if env("KAFKA_PUBLISH_ENABLED", "true") != "false" {
-		brokers := strings.Split(env("KAFKA_BROKERS", "kafka:9092"), ",")
+		brokers := startup.SplitCSV(env("KAFKA_BROKERS", "kafka:9092"))
 		ctx, cancel := context.WithTimeout(context.Background(), dependencyTimeout)
-		if err := retryDependency(ctx, "kafka broker", dependencyInterval, func(ctx context.Context) error {
-			return pingTCP(ctx, strings.TrimSpace(brokers[0]))
+		if err := startup.RetryDependency(ctx, "kafka broker", dependencyInterval, log.Printf, func(ctx context.Context) error {
+			return startup.PingAnyTCP(ctx, brokers)
 		}); err != nil {
 			cancel()
 			log.Fatalf("kafka broker failed: %v", err)
@@ -86,42 +85,4 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return time.Duration(millis) * time.Millisecond
-}
-
-func retryDependency(ctx context.Context, name string, interval time.Duration, operation func(context.Context) error) error {
-	if interval <= 0 {
-		interval = time.Second
-	}
-	var lastErr error
-	for attempt := 1; ; attempt++ {
-		if err := operation(ctx); err == nil {
-			if attempt > 1 {
-				log.Printf("%s ready after %d attempts", name, attempt)
-			}
-			return nil
-		} else {
-			lastErr = err
-			log.Printf("%s not ready attempt=%d error=%v", name, attempt, err)
-		}
-
-		timer := time.NewTimer(interval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return fmt.Errorf("%s not ready before timeout: %w", name, lastErr)
-		case <-timer.C:
-		}
-	}
-}
-
-func pingTCP(ctx context.Context, address string) error {
-	if address == "" {
-		return fmt.Errorf("empty address")
-	}
-	var dialer net.Dialer
-	conn, err := dialer.DialContext(ctx, "tcp", address)
-	if err != nil {
-		return err
-	}
-	return conn.Close()
 }

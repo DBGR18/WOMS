@@ -4,9 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"log"
-	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -14,12 +12,14 @@ import (
 
 	"github.com/d11nn/woms/internal/domain"
 	"github.com/d11nn/woms/internal/scheduler"
+	"github.com/d11nn/woms/internal/startup"
 	_ "github.com/lib/pq"
 	"github.com/segmentio/kafka-go"
 )
 
 func main() {
 	brokers := env("KAFKA_BROKERS", "kafka:9092")
+	brokerList := startup.SplitCSV(brokers)
 	topic := env("KAFKA_SCHEDULE_TOPIC", "woms.schedule.jobs")
 	group := env("KAFKA_CONSUMER_GROUP", "woms-scheduler-workers")
 	databaseURL := env("DATABASE_URL", "")
@@ -47,7 +47,7 @@ func main() {
 			log.Fatalf("postgres open failed: %v", err)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), dependencyTimeout)
-		err = retryDependency(ctx, "postgres", dependencyInterval, func(ctx context.Context) error {
+		err = startup.RetryDependency(ctx, "postgres", dependencyInterval, log.Printf, func(ctx context.Context) error {
 			return db.PingContext(ctx)
 		})
 		cancel()
@@ -62,15 +62,15 @@ func main() {
 
 	log.Printf("scheduler worker starting brokers=%s topic=%s group=%s minJobDuration=%s", brokers, topic, group, minJobDuration)
 	ctx, cancel := context.WithTimeout(context.Background(), dependencyTimeout)
-	if err := retryDependency(ctx, "kafka broker", dependencyInterval, func(ctx context.Context) error {
-		return pingTCP(ctx, strings.TrimSpace(strings.Split(brokers, ",")[0]))
+	if err := startup.RetryDependency(ctx, "kafka broker", dependencyInterval, log.Printf, func(ctx context.Context) error {
+		return startup.PingAnyTCP(ctx, brokerList)
 	}); err != nil {
 		cancel()
 		log.Fatalf("kafka broker failed: %v", err)
 	}
 	cancel()
 	reader := kafka.NewReader(kafka.ReaderConfig{
-		Brokers: strings.Split(brokers, ","),
+		Brokers: brokerList,
 		Topic:   topic,
 		GroupID: group,
 		// Ensure the consumer picks up topics/partitions created after startup.
@@ -459,44 +459,6 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return parsed
-}
-
-func retryDependency(ctx context.Context, name string, interval time.Duration, operation func(context.Context) error) error {
-	if interval <= 0 {
-		interval = time.Second
-	}
-	var lastErr error
-	for attempt := 1; ; attempt++ {
-		if err := operation(ctx); err == nil {
-			if attempt > 1 {
-				log.Printf("%s ready after %d attempts", name, attempt)
-			}
-			return nil
-		} else {
-			lastErr = err
-			log.Printf("%s not ready attempt=%d error=%v", name, attempt, err)
-		}
-
-		timer := time.NewTimer(interval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return fmt.Errorf("%s not ready before timeout: %w", name, lastErr)
-		case <-timer.C:
-		}
-	}
-}
-
-func pingTCP(ctx context.Context, address string) error {
-	if address == "" {
-		return fmt.Errorf("empty address")
-	}
-	var dialer net.Dialer
-	conn, err := dialer.DialContext(ctx, "tcp", address)
-	if err != nil {
-		return err
-	}
-	return conn.Close()
 }
 
 func contains(values []string, target string) bool {
