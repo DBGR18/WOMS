@@ -13,10 +13,16 @@ GTHULHU_IMAGE_TAG="${GTHULHU_IMAGE_TAG:-woms-integration-f71f78a}"
 WORKER_DEPLOY="${RELEASE}-woms-worker"
 LOAD_LABEL="app=woms-hpa-load,scenario=${HPA_SCENARIO}"
 NEEDS_RESTORE=false
+CLEANED_UP=false
 
 cleanup() {
+  if [ "$CLEANED_UP" = "true" ]; then
+    return
+  fi
+  CLEANED_UP=true
   "$KUBECTL" delete job,pod -n "$NAMESPACE" -l "$LOAD_LABEL" --ignore-not-found=true >/dev/null 2>&1 || true
   if [ "$NEEDS_RESTORE" = "true" ]; then
+    remove_worker_deployment_cpu_load >/dev/null 2>&1 || true
     helm_upgrade \
       --set keda.kafka.enabled=true \
       --set keda.cpu.enabled=true \
@@ -122,6 +128,25 @@ JSON
   "$KUBECTL" rollout status "deployment/${WORKER_DEPLOY}" -n "$NAMESPACE" --timeout=180s
 }
 
+remove_worker_deployment_cpu_load() {
+  "$KUBECTL" patch deployment "$WORKER_DEPLOY" -n "$NAMESPACE" --type=strategic -p '
+{
+  "spec": {
+    "template": {
+      "spec": {
+        "containers": [
+          {
+            "name": "hpa-cpu-load",
+            "$patch": "delete"
+          }
+        ]
+      }
+    }
+  }
+}'
+  "$KUBECTL" rollout status "deployment/${WORKER_DEPLOY}" -n "$NAMESPACE" --timeout=180s
+}
+
 case "$HPA_SCENARIO" in
   cpu)
     helm_upgrade \
@@ -160,6 +185,7 @@ esac
 "$KUBECTL" get scaledobject "$WORKER_DEPLOY" -n "$NAMESPACE" -o yaml
 wait_replicas 2 ge
 cleanup
+CLEANED_UP=false
 
 helm_upgrade \
   --set keda.kafka.enabled=true \

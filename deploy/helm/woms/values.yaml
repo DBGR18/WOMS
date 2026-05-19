@@ -19,6 +19,8 @@ api:
     kafkaBrokers: kafka:9092
     scheduleTopic: woms.schedule.jobs
     kafkaPublishEnabled: "true"
+    dependencyRetryTimeoutMs: "120000"
+    dependencyRetryIntervalMs: "2000"
   resources:
     requests:
       cpu: 100m
@@ -36,6 +38,8 @@ worker:
     databaseUrl: postgres://woms:woms@postgres:5432/woms?sslmode=disable
     minJobDurationMs: "0"
     maxRetries: "3"
+    dependencyRetryTimeoutMs: "120000"
+    dependencyRetryIntervalMs: "2000"
   resources:
     requests:
       cpu: 100m

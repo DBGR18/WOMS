@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -24,6 +26,8 @@ func main() {
 	minJobDuration := envDuration("WORKER_MIN_JOB_DURATION_MS", 0)
 	maxRetries := envInt("WORKER_MAX_RETRIES", 3)
 	backfillInterval := envDuration("WORKER_BACKFILL_INTERVAL_MS", 5*time.Second)
+	dependencyTimeout := envDuration("WORKER_DEPENDENCY_RETRY_TIMEOUT_MS", 2*time.Minute)
+	dependencyInterval := envDuration("WORKER_DEPENDENCY_RETRY_INTERVAL_MS", 2*time.Second)
 	startOffsetLabel := strings.ToLower(strings.TrimSpace(env("WORKER_START_OFFSET", "latest")))
 	startOffset := kafka.LastOffset
 	switch startOffsetLabel {
@@ -42,7 +46,12 @@ func main() {
 		if err != nil {
 			log.Fatalf("postgres open failed: %v", err)
 		}
-		if err := db.Ping(); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), dependencyTimeout)
+		err = retryDependency(ctx, "postgres", dependencyInterval, func(ctx context.Context) error {
+			return db.PingContext(ctx)
+		})
+		cancel()
+		if err != nil {
 			log.Fatalf("postgres ping failed: %v", err)
 		}
 		defer db.Close()
@@ -52,6 +61,14 @@ func main() {
 	}
 
 	log.Printf("scheduler worker starting brokers=%s topic=%s group=%s minJobDuration=%s", brokers, topic, group, minJobDuration)
+	ctx, cancel := context.WithTimeout(context.Background(), dependencyTimeout)
+	if err := retryDependency(ctx, "kafka broker", dependencyInterval, func(ctx context.Context) error {
+		return pingTCP(ctx, strings.TrimSpace(strings.Split(brokers, ",")[0]))
+	}); err != nil {
+		cancel()
+		log.Fatalf("kafka broker failed: %v", err)
+	}
+	cancel()
 	reader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers: strings.Split(brokers, ","),
 		Topic:   topic,
@@ -442,6 +459,44 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return parsed
+}
+
+func retryDependency(ctx context.Context, name string, interval time.Duration, operation func(context.Context) error) error {
+	if interval <= 0 {
+		interval = time.Second
+	}
+	var lastErr error
+	for attempt := 1; ; attempt++ {
+		if err := operation(ctx); err == nil {
+			if attempt > 1 {
+				log.Printf("%s ready after %d attempts", name, attempt)
+			}
+			return nil
+		} else {
+			lastErr = err
+			log.Printf("%s not ready attempt=%d error=%v", name, attempt, err)
+		}
+
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("%s not ready before timeout: %w", name, lastErr)
+		case <-timer.C:
+		}
+	}
+}
+
+func pingTCP(ctx context.Context, address string) error {
+	if address == "" {
+		return fmt.Errorf("empty address")
+	}
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "tcp", address)
+	if err != nil {
+		return err
+	}
+	return conn.Close()
 }
 
 func contains(values []string, target string) bool {

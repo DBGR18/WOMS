@@ -104,8 +104,10 @@ cp .env.example .env
 - `KAFKA_BROKERS`：Kafka broker 清單。
 - `KAFKA_SCHEDULE_TOPIC`：排程任務 topic。
 - `KAFKA_PUBLISH_ENABLED`：是否由 API publish 排程任務到 Kafka，預設 `true`。
+- `API_DEPENDENCY_RETRY_TIMEOUT_MS` / `API_DEPENDENCY_RETRY_INTERVAL_MS`：API 啟動時等待 PostgreSQL/Kafka readiness 的 retry 視窗與間隔。
 - `WORKER_MIN_JOB_DURATION_MS`：worker 每個 job 的 demo 最小處理時間，正式環境可設為 `0`。
 - `WORKER_MAX_RETRIES`：worker 遇到暫時性 DB/Kafka 錯誤時的最大重試次數。
+- `WORKER_DEPENDENCY_RETRY_TIMEOUT_MS` / `WORKER_DEPENDENCY_RETRY_INTERVAL_MS`：scheduler-worker 啟動時等待 PostgreSQL/Kafka readiness 的 retry 視窗與間隔。
 - `DOCKERHUB_NAMESPACE`：Docker Hub namespace。
 - `WOMS_IMAGE_TAG`：Docker Compose 使用的 image tag，預設 `latest`。
 - `API_UPSTREAM`：web NGINX 代理 API 的 upstream；Docker Compose 會設定為 `api:8080`。
@@ -266,6 +268,8 @@ kubectl get secret woms-woms-api -n woms -o jsonpath='{.data.JWT_SECRET}' | base
 目前 Helm chart 會一併安裝內建 PostgreSQL、Redis 與 Kafka dependencies，供本機、單節點 MicroK8s 或 VM demo 使用，並建立對應的 StatefulSet / PVC。這些預設僅適合示範與開發環境，不建議直接用於正式環境。
 
 正式環境應使用自訂 values file，明確設定外部服務 endpoint、credentials、`api.jwtSecret`；若使用 fork 後自行建置的 images，也應設定 `imageRegistry`。
+
+API 與 scheduler-worker container 會在啟動時對 PostgreSQL 與 Kafka readiness 做 bounded retry/backoff。Helm 預設透過 `api.env.dependencyRetryTimeoutMs`、`api.env.dependencyRetryIntervalMs`、`worker.env.dependencyRetryTimeoutMs`、`worker.env.dependencyRetryIntervalMs` 設定最多等待 120 秒、每 2 秒重試一次。
 
 Chart 會固定 dependency chart 版本使用的 Bitnami image tags。Docker Hub 已不再從 `bitnami/*` 提供這些保留 tags，因此預設 values 會把 PostgreSQL、Redis、Kafka 與 Kafka topic hook 覆寫到 `bitnamilegacy/*`。
 

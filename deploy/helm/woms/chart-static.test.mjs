@@ -17,6 +17,7 @@ const dashboard = readFileSync(new URL("./dashboards/woms-monitoring.json", impo
 const mongodbStatefulSet = readFileSync(new URL("./charts/gthulhu/charts/mongodb/templates/statefulset.yaml", import.meta.url), "utf8");
 const mtlsCertScript = readFileSync(new URL("./charts/gthulhu/gen-mtls-certs.sh", import.meta.url), "utf8");
 const gthulhuMonitoringScript = readFileSync(new URL("../../../scripts/verify-gthulhu-monitoring.sh", import.meta.url), "utf8");
+const hpaBehaviorScript = readFileSync(new URL("../../../scripts/verify-hpa-behavior.sh", import.meta.url), "utf8");
 const kafkaTopicJob = readFileSync(new URL("./templates/kafka-topic-job.yaml", import.meta.url), "utf8");
 const secret = readFileSync(new URL("./templates/secret.yaml", import.meta.url), "utf8");
 const notes = readFileSync(new URL("./templates/NOTES.txt", import.meta.url), "utf8");
@@ -34,6 +35,8 @@ test("Helm values keep async scheduling and HPA demo defaults wired", () => {
   assert.match(values, /kafkaBrokers:\s+kafka:9092/);
   assert.match(values, /scheduleTopic:\s+woms\.schedule\.jobs/);
   assert.match(values, /kafkaPublishEnabled:\s+"true"/);
+  assert.match(values, /dependencyRetryTimeoutMs:\s+"120000"/);
+  assert.match(values, /dependencyRetryIntervalMs:\s+"2000"/);
   assert.match(values, /minJobDurationMs:\s+"0"/);
   assert.match(values, /maxRetries:\s+"3"/);
   assert.match(values, /consumerGroup:\s+woms-scheduler-workers/);
@@ -122,6 +125,13 @@ test("Gthulhu helper scripts quote user-controlled data safely", () => {
   assert.match(gthulhuMonitoringScript, /curl -fsS -G --data-urlencode "query=\$1"/);
 });
 
+test("HPA behavior CPU scenario removes its injected load sidecar during cleanup", () => {
+  assert.match(hpaBehaviorScript, /remove_worker_deployment_cpu_load\(\)/);
+  assert.match(hpaBehaviorScript, /"name": "hpa-cpu-load"/);
+  assert.match(hpaBehaviorScript, /"\$patch": "delete"/);
+  assert.match(hpaBehaviorScript, /rollout status "deployment\/\$\{WORKER_DEPLOY\}"/);
+});
+
 test("Default Docker image tags use v-prefixed release tags", () => {
   assert.match(values, /^imageRegistry:\s+docker\.io\/d11nn/m);
   const apiTag = imageTag("api");
@@ -201,12 +211,16 @@ test("API and worker deployments expose PostgreSQL, Kafka, and retry env", () =>
   assert.match(apiDeployment, /name:\s+DATABASE_URL/);
   assert.match(apiDeployment, /name:\s+KAFKA_SCHEDULE_TOPIC/);
   assert.match(apiDeployment, /name:\s+KAFKA_PUBLISH_ENABLED/);
+  assert.match(apiDeployment, /name:\s+API_DEPENDENCY_RETRY_TIMEOUT_MS/);
+  assert.match(apiDeployment, /name:\s+API_DEPENDENCY_RETRY_INTERVAL_MS/);
   assert.match(workerDeployment, /name:\s+KAFKA_SCHEDULE_TOPIC/);
   assert.match(workerDeployment, /value:\s+\{\{ tpl \.Values\.keda\.kafka\.bootstrapServers \. \| quote \}\}/);
   assert.match(workerDeployment, /name:\s+KAFKA_CONSUMER_GROUP/);
   assert.match(workerDeployment, /name:\s+DATABASE_URL/);
   assert.match(workerDeployment, /name:\s+WORKER_MIN_JOB_DURATION_MS/);
   assert.match(workerDeployment, /name:\s+WORKER_MAX_RETRIES/);
+  assert.match(workerDeployment, /name:\s+WORKER_DEPENDENCY_RETRY_TIMEOUT_MS/);
+  assert.match(workerDeployment, /name:\s+WORKER_DEPENDENCY_RETRY_INTERVAL_MS/);
   assert.match(workerDeployment, /if not \.Values\.keda\.enabled/);
   assert.match(workerDeployment, /replicas:\s+\{\{ \.Values\.worker\.replicaCount \}\}/);
 });
