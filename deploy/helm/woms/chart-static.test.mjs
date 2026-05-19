@@ -14,6 +14,9 @@ const grafanaConfig = readFileSync(new URL("./templates/grafana-configmap.yaml",
 const gthulhuPsm = readFileSync(new URL("./templates/gthulhu-podschedulingmetrics.yaml", import.meta.url), "utf8");
 const gthulhuOverlay = readFileSync(new URL("./values-gthulhu-monitor.yaml", import.meta.url), "utf8");
 const dashboard = readFileSync(new URL("./dashboards/woms-monitoring.json", import.meta.url), "utf8");
+const mongodbStatefulSet = readFileSync(new URL("./charts/gthulhu/charts/mongodb/templates/statefulset.yaml", import.meta.url), "utf8");
+const mtlsCertScript = readFileSync(new URL("./charts/gthulhu/gen-mtls-certs.sh", import.meta.url), "utf8");
+const gthulhuMonitoringScript = readFileSync(new URL("../../../scripts/verify-gthulhu-monitoring.sh", import.meta.url), "utf8");
 const kafkaTopicJob = readFileSync(new URL("./templates/kafka-topic-job.yaml", import.meta.url), "utf8");
 const secret = readFileSync(new URL("./templates/secret.yaml", import.meta.url), "utf8");
 const notes = readFileSync(new URL("./templates/NOTES.txt", import.meta.url), "utf8");
@@ -105,6 +108,18 @@ test("PodSchedulingMetrics selector targets WOMS workers", () => {
   assert.match(gthulhuPsm, /tpl \.Values\.gthulhu\.podSchedulingMetrics\.name \./);
   assert.match(values, /podSchedulingMetrics:[\s\S]*labelSelectors:[\s\S]*key:\s+app\.kubernetes\.io\/component[\s\S]*value:\s+scheduler-worker/);
   assert.match(values, /key:\s+app\.kubernetes\.io\/instance[\s\S]*value:\s+'\{\{ \.Release\.Name \}\}'/);
+});
+
+test("Gthulhu helper scripts quote user-controlled data safely", () => {
+  assert.match(mongodbStatefulSet, /process\.env\.MONGO_ROOT_USERNAME/);
+  assert.match(mongodbStatefulSet, /process\.env\.MONGO_ROOT_PASSWORD/);
+  assert.doesNotMatch(mongodbStatefulSet, /db\.getUser\('"\$MONGO_ROOT_USERNAME"'\)/);
+  assert.doesNotMatch(mongodbStatefulSet, /pwd:\s+'"\$MONGO_ROOT_PASSWORD"'/);
+  assert.doesNotMatch(mongodbStatefulSet, /chown 999:999/);
+  assert.match(mongodbStatefulSet, /defaultMode:\s+0440/);
+  assert.match(mtlsCertScript, /umask 077/);
+  assert.match(mtlsCertScript, /printf '%s\\n%s\\n'/);
+  assert.match(gthulhuMonitoringScript, /curl -fsS -G --data-urlencode "query=\$1"/);
 });
 
 test("Default Docker image tags use v-prefixed release tags", () => {

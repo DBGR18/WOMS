@@ -12,7 +12,7 @@ NAMESPACE_LABEL="${NAMESPACE_LABEL:-exported_namespace}"
 prom_query() {
   query="$1"
   "$KUBECTL" exec -n "$NAMESPACE" "deploy/${PROMETHEUS_SERVICE}" -- \
-    wget -qO- "http://127.0.0.1:9090/api/v1/query?query=${query}"
+    sh -c 'if command -v curl >/dev/null 2>&1; then curl -fsS -G --data-urlencode "query=$1" "http://127.0.0.1:9090/api/v1/query"; else wget -qO- "http://127.0.0.1:9090/api/v1/query?query=$1"; fi' sh "$query"
 }
 
 require_success_query() {

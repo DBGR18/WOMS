@@ -266,7 +266,7 @@ openssl req -new -key dm.key -out dm.csr \
 
 openssl x509 -req -days 730 \
   -in dm.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
-  -extfile <(printf "subjectAltName=DNS:localhost,IP:127.0.0.1,DNS:*.svc.cluster.local\nextendedKeyUsage=serverAuth,clientAuth") \
+  -extfile <(printf '%s\n%s\n' "subjectAltName=DNS:localhost,IP:127.0.0.1,DNS:*.svc.cluster.local" "extendedKeyUsage=serverAuth,clientAuth") \
   -out dm.crt
 ```
 
@@ -283,7 +283,7 @@ openssl req -new -key manager.key -out manager.csr \
 
 openssl x509 -req -days 730 \
   -in manager.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
-  -extfile <(printf "extendedKeyUsage=clientAuth") \
+  -extfile <(printf '%s\n' "extendedKeyUsage=clientAuth") \
   -out manager.crt
 ```
 

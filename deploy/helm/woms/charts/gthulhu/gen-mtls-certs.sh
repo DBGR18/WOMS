@@ -23,6 +23,7 @@
 #   - Any extra SANs from DM_EXTRA_SANS
 
 set -euo pipefail
+umask 077
 
 OUT="${1:-certs}"
 mkdir -p "$OUT"
@@ -62,7 +63,7 @@ openssl req -new \
 openssl x509 -req -days "$LEAF_DAYS" \
   -in "$OUT/dm.csr" \
   -CA "$OUT/ca.crt" -CAkey "$OUT/ca.key" -CAcreateserial \
-  -extfile <(printf "subjectAltName=${DM_SANS}\nextendedKeyUsage=serverAuth,clientAuth") \
+  -extfile <(printf '%s\n%s\n' "subjectAltName=${DM_SANS}" "extendedKeyUsage=serverAuth,clientAuth") \
   -out "$OUT/dm.crt"
 
 echo "==> Generating Manager client certificate …"
@@ -74,7 +75,7 @@ openssl req -new \
 openssl x509 -req -days "$LEAF_DAYS" \
   -in "$OUT/manager.csr" \
   -CA "$OUT/ca.crt" -CAkey "$OUT/ca.key" -CAcreateserial \
-  -extfile <(printf "extendedKeyUsage=clientAuth") \
+  -extfile <(printf '%s\n' "extendedKeyUsage=clientAuth") \
   -out "$OUT/manager.crt"
 
 # Clean up CSRs

@@ -31,7 +31,6 @@ spec:
             - |
               cp /etc/mongo-keyfile-source/keyfile /etc/mongo-keyfile/keyfile
               chmod 400 /etc/mongo-keyfile/keyfile
-              chown 999:999 /etc/mongo-keyfile/keyfile
           volumeMounts:
             - name: keyfile-source
               mountPath: /etc/mongo-keyfile-source
@@ -124,15 +123,16 @@ spec:
                         sleep(1000);
                       }
 
-                      // Create admin user if not exists
+                      // Create admin user if not exists. Read credentials from
+                      // process.env so secret values cannot break this script.
                       db = db.getSiblingDB("admin");
                       try {
-                        db.getUser("'"$MONGO_ROOT_USERNAME"'");
+                        db.getUser(process.env.MONGO_ROOT_USERNAME);
                         print("Admin user already exists");
                       } catch (e) {
                         db.createUser({
-                          user: "'"$MONGO_ROOT_USERNAME"'",
-                          pwd: "'"$MONGO_ROOT_PASSWORD"'",
+                          user: process.env.MONGO_ROOT_USERNAME,
+                          pwd: process.env.MONGO_ROOT_PASSWORD,
                           roles: [{ role: "root", db: "admin" }]
                         });
                         print("Admin user created");
@@ -182,7 +182,7 @@ spec:
         - name: keyfile-source
           secret:
             secretName: {{ include "mongodb.keyfileSecretName" . }}
-            defaultMode: 0400
+            defaultMode: 0440
         - name: mongo-keyfile-processed
           emptyDir: {}
         {{- if not .Values.persistence.enabled }}
