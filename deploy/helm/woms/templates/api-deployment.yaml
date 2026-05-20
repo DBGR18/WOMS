@@ -46,6 +46,12 @@ spec:
               value: {{ .Values.api.env.scheduleTopic | quote }}
             - name: KAFKA_PUBLISH_ENABLED
               value: {{ .Values.api.env.kafkaPublishEnabled | quote }}
+            - name: CORS_ALLOWED_ORIGIN
+              value: {{ .Values.api.env.corsAllowedOrigin | quote }}
+            - name: AUTH_MODE
+              value: {{ .Values.api.env.authMode | quote }}
+            - name: AUTH_SESSION_STORE
+              value: {{ .Values.api.env.authSessionStore | quote }}
             - name: API_DEPENDENCY_RETRY_TIMEOUT_MS
               value: {{ .Values.api.env.dependencyRetryTimeoutMs | quote }}
             - name: API_DEPENDENCY_RETRY_INTERVAL_MS

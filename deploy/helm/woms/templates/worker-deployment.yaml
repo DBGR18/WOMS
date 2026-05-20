@@ -32,10 +32,18 @@ spec:
               value: {{ .Values.keda.kafka.consumerGroup | quote }}
             - name: DATABASE_URL
               value: {{ .Values.worker.env.databaseUrl | quote }}
+            - name: REDIS_ADDR
+              value: {{ .Values.worker.env.redisAddr | quote }}
             - name: WORKER_MIN_JOB_DURATION_MS
               value: {{ .Values.worker.env.minJobDurationMs | quote }}
             - name: WORKER_MAX_RETRIES
               value: {{ .Values.worker.env.maxRetries | quote }}
+            - name: WORKER_LOCK_TTL_MS
+              value: {{ .Values.worker.env.lockTtlMs | quote }}
+            - name: WORKER_LOCK_RENEW_INTERVAL_MS
+              value: {{ .Values.worker.env.lockRenewIntervalMs | quote }}
+            - name: WORKER_LOCK_TIMEOUT_MS
+              value: {{ .Values.worker.env.lockTimeoutMs | quote }}
             - name: WORKER_DEPENDENCY_RETRY_TIMEOUT_MS
               value: {{ .Values.worker.env.dependencyRetryTimeoutMs | quote }}
             - name: WORKER_DEPENDENCY_RETRY_INTERVAL_MS

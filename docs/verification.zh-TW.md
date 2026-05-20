@@ -55,6 +55,17 @@ curl -i http://localhost:8080/api/schedules/jobs \
 - 用 `scheduler-a` 查詢該 job。
 - 期望：`403 Forbidden`。
 
+檢查 admin 帳號管理：
+
+```bash
+curl -i http://localhost:8080/api/users \
+  -H "Authorization: Bearer <admin-token>" \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"class-sales","password":"temporary","role":"sales"}'
+```
+
+期望：`201 Created`，response 不包含 password material，且新帳號可登入。sales 或 scheduler token 呼叫同一 endpoint 會回 `403 Forbidden`。
+
 檢查月曆行為：
 
 - 用排程工程師建立排程任務。
@@ -218,12 +229,20 @@ Scripts 只會清理臨時壓測 pods/jobs，不會移除 WOMS、Gthulhu、Prome
 
 同產線同時送兩個排程 job：
 
-- 期望不產生重疊 schedule version。
-- 其中一個 job 應等待、重試或乾淨失敗。
+- 期望 scheduler-worker 使用 Redis `woms:locks:schedule-line:<lineId>`，不產生重疊 schedule version；其中一個 job 應等待、重試或乾淨失敗。
 
 不同產線同時送 job：
 
 - 期望可並行處理。
+
+長時間 worker job 執行期間檢查 Redis：
+
+```bash
+redis-cli -h <redis-host> --scan --pattern 'woms:locks:schedule-line:*'
+redis-cli -h <redis-host> pttl woms:locks:schedule-line:A
+```
+
+期望：job 執行期間 lock 有正 TTL，job completed/failed 後 lock 會釋放。
 
 ## 10. 完成功能標準
 

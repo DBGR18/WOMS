@@ -90,8 +90,12 @@ services:
       KAFKA_SCHEDULE_TOPIC: woms.schedule.jobs
       KAFKA_CONSUMER_GROUP: ${KAFKA_CONSUMER_GROUP:-woms-scheduler-workers}
       DATABASE_URL: postgres://woms:woms@postgres:5432/woms?sslmode=disable
+      REDIS_ADDR: redis:6379
       WORKER_MIN_JOB_DURATION_MS: "500"
       WORKER_MAX_RETRIES: "3"
+      WORKER_LOCK_TTL_MS: "15000"
+      WORKER_LOCK_RENEW_INTERVAL_MS: "5000"
+      WORKER_LOCK_TIMEOUT_MS: "10000"
       WORKER_START_OFFSET: ${WORKER_START_OFFSET:-latest}
     depends_on:
       postgres:
@@ -171,4 +175,3 @@ services:
 volumes:
   postgres-data:
   grafana-storage:
-

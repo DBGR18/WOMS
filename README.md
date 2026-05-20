@@ -97,6 +97,9 @@ cp .env.example .env
 Important settings:
 
 - `JWT_SECRET`: JWT signing secret. Replace it in production.
+- `AUTH_MODE`: auth verifier mode. `local` uses WOMS JWT login; `edge` accepts the same signed bearer token shape for future gateway-issued tokens and still ignores plain `X-User-*` headers.
+- `AUTH_SESSION_STORE`: optional token session backend. Leave empty for stateless JWT; set `redis` only when Redis-backed token revocation is explicitly needed.
+- `CORS_ALLOWED_ORIGIN`: allowed API origin. Local defaults to `*`; demos can pin this to the web origin.
 - `API_STORE`: API store backend. Helm and Docker default to `postgres`; tests can use memory.
 - `DEMO_SEED_DATA`: defaults to `true`; set to `false` to start the API without demo orders.
 - `DATABASE_URL`: PostgreSQL connection string.
@@ -107,6 +110,7 @@ Important settings:
 - `API_DEPENDENCY_RETRY_TIMEOUT_MS` / `API_DEPENDENCY_RETRY_INTERVAL_MS`: API startup retry window and interval for PostgreSQL/Kafka readiness checks.
 - `WORKER_MIN_JOB_DURATION_MS`: demo minimum worker time per job. Production deployments can set it to `0`.
 - `WORKER_MAX_RETRIES`: maximum worker retries for transient DB/Kafka errors.
+- `WORKER_LOCK_TTL_MS` / `WORKER_LOCK_RENEW_INTERVAL_MS` / `WORKER_LOCK_TIMEOUT_MS`: Redis per-production-line scheduling lock TTL, renewal interval, and acquire timeout.
 - `WORKER_DEPENDENCY_RETRY_TIMEOUT_MS` / `WORKER_DEPENDENCY_RETRY_INTERVAL_MS`: scheduler-worker startup retry window and interval for PostgreSQL/Kafka readiness checks.
 - `DOCKERHUB_NAMESPACE`: Docker Hub namespace.
 - `WOMS_IMAGE_TAG`: Docker image tag used by Docker Compose. Defaults to `latest` so Compose builds and local runs stay aligned with the Docker Hub `latest` tag.
@@ -162,7 +166,7 @@ Frontend behavior:
 
 - Users land on a dedicated login page until a valid session exists; internal pages are hidden before login.
 - Login is stored in browser `localStorage`, so refresh keeps the current session until the JWT expires or is rejected.
-- Admin users can assign account roles and scheduler production lines from the Admin panel. Non-admin users receive `403`.
+- Admin users can create accounts, assign roles and scheduler production lines, reset temporary passwords, and delete or disable accounts from the Admin panel. Non-admin users receive `403`.
 - Production line settings are loaded from `GET /api/lines`; each line includes a required IANA timezone, defaulting to `Asia/Taipei`, while Line D is configured as `Europe/London`. The active production line selector defaults to the lexicographically lowest line for sales/admin users and locks to the assigned line for scheduler users.
 - Exact filters support customer and priority. Customer filtering opens as a compact menu, and its options are scoped by the active status and priority filters; order status is controlled by the left status panel.
 - Status counts are scoped to the active production line.
