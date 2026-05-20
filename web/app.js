@@ -63,6 +63,8 @@ const state = {
 let pointerScheduleDrag = null;
 let mouseScheduleDrag = null;
 let suppressNextOrderClick = false;
+let hpaPeakPoller = null;
+let hpaPeakPollInFlight = false;
 
 document.querySelector('input[name="startDate"]').value = tomorrowDateInputValue();
 document.querySelector('input[name="dueDate"]').value = addDaysToDateKey(todayDateInputValue(), 3);
@@ -193,6 +195,7 @@ document.getElementById("create-hpa-peak").addEventListener("click", async () =>
     const payload = await request("/api/demo/hpa-peak", { method: "POST" });
     state.hpaPeak = payload.summary;
     renderHPAPeakSummary();
+    syncHPAPeakPolling();
     showMessage("排程尖峰已建立", "多產線排程任務已送入背景佇列，請觀察 Kafka lag 與 worker HPA。");
     await refreshWorkspace();
   } catch (error) {
@@ -215,6 +218,7 @@ document.getElementById("clear-hpa-peak").addEventListener("click", async () => 
     const payload = await request("/api/demo/hpa-peak", { method: "DELETE" });
     state.hpaPeak = payload.summary;
     renderHPAPeakSummary();
+    syncHPAPeakPolling();
     showMessage("排程尖峰已清除", "L001-L200 的排程尖峰資料已清除。");
     await refreshWorkspace();
   } catch (error) {
@@ -554,6 +558,41 @@ async function loadHPAPeakSummary() {
   const payload = await request("/api/demo/hpa-peak");
   state.hpaPeak = payload.summary;
   renderHPAPeakSummary();
+  syncHPAPeakPolling();
+}
+
+function syncHPAPeakPolling() {
+  const active = state.token && state.user?.role === "admin" && isHPAPeakActive(state.hpaPeak);
+  if (!active) {
+    if (hpaPeakPoller) {
+      window.clearInterval(hpaPeakPoller);
+      hpaPeakPoller = null;
+    }
+    return;
+  }
+  if (hpaPeakPoller) {
+    return;
+  }
+  hpaPeakPoller = window.setInterval(async () => {
+    if (hpaPeakPollInFlight) {
+      return;
+    }
+    hpaPeakPollInFlight = true;
+    try {
+      await loadHPAPeakSummary();
+    } catch {
+      // Keep the current panel visible; manual refresh will surface errors.
+    } finally {
+      hpaPeakPollInFlight = false;
+    }
+  }, 3000);
+}
+
+function isHPAPeakActive(summary) {
+  if (!summary) {
+    return false;
+  }
+  return Number(summary.lineCount ?? 0) > 0 || Number(summary.orderCount ?? 0) > 0 || Number(summary.jobCount ?? 0) > 0;
 }
 
 async function loadLines() {
@@ -677,12 +716,30 @@ function renderHPAPeakSummary() {
   const failedMessages = summary.failedMessages?.length
     ? `<div class="hpa-failures">${summary.failedMessages.map((message) => `<span>${escapeHtml(message)}</span>`).join("")}</div>`
     : "";
+  const autoscaling = summary.autoscaling;
+  const autoscalingError = autoscaling?.error
+    ? `<div class="hpa-failures"><span>${escapeHtml(autoscaling.error)}</span></div>`
+    : "";
+  const autoscalingPanel = autoscaling
+    ? `
+    <div class="hpa-autoscaling">
+      <span>HPA 目標 ${Number(autoscaling.desiredReplicas ?? 0).toLocaleString()} / ${Number(autoscaling.maxReplicas ?? 0).toLocaleString()}</span>
+      <span>目前 replicas ${Number(autoscaling.currentReplicas ?? 0).toLocaleString()}</span>
+      <span>Deployment ready ${Number(autoscaling.readyReplicas ?? 0).toLocaleString()} / ${Number(autoscaling.deploymentReplicas ?? 0).toLocaleString()}</span>
+      <span>Worker pods ready ${Number(autoscaling.readyPods ?? 0).toLocaleString()} / ${Number(autoscaling.workerPods ?? 0).toLocaleString()}</span>
+    </div>
+    ${autoscalingError}`
+    : `
+    <div class="hpa-autoscaling">
+      <span>Kubernetes 狀態 未連線</span>
+    </div>`;
   panel.innerHTML = `
     <div class="hpa-metrics">
       <span>產線 ${Number(summary.lineCount ?? 0).toLocaleString()}</span>
       <span>訂單 ${Number(summary.orderCount ?? 0).toLocaleString()}</span>
       <span>排程任務 ${Number(summary.jobCount ?? 0).toLocaleString()}</span>
     </div>
+    ${autoscalingPanel}
     <div class="hpa-status-grid">
       ${Object.entries(hpaJobStatusLabels).map(([status, label]) => `<span>${label} ${Number(hpaStatuses[status] ?? 0).toLocaleString()}</span>`).join("")}
     </div>
@@ -1834,10 +1891,12 @@ function clearSession() {
   state.orders = [];
   state.calendarAllocations = [];
   state.preview = null;
+  state.hpaPeak = null;
   state.productionOrderId = "";
   state.selectedOrderIds.clear();
   localStorage.removeItem("woms.token");
   localStorage.removeItem("woms.user");
+  syncHPAPeakPolling();
 }
 
 function showMessage(title, body, type = "info", details = "") {

@@ -3,13 +3,17 @@ package api
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -861,6 +865,7 @@ type hpaPeakSummary struct {
 	OrderCount     int                  `json:"orderCount"`
 	JobCount       int                  `json:"jobCount"`
 	Statuses       map[string]int       `json:"statuses"`
+	Autoscaling    *hpaAutoscalingState `json:"autoscaling,omitempty"`
 	Topic          string               `json:"topic"`
 	ConsumerGroup  string               `json:"consumerGroup"`
 	HPAName        string               `json:"hpaName"`
@@ -873,6 +878,19 @@ type hpaPeakSummary struct {
 
 type hpaPeakResponse struct {
 	Summary hpaPeakSummary `json:"summary"`
+}
+
+type hpaAutoscalingState struct {
+	CurrentReplicas    int    `json:"currentReplicas"`
+	DesiredReplicas    int    `json:"desiredReplicas"`
+	MinReplicas        int    `json:"minReplicas"`
+	MaxReplicas        int    `json:"maxReplicas"`
+	DeploymentReplicas int    `json:"deploymentReplicas"`
+	ReadyReplicas      int    `json:"readyReplicas"`
+	AvailableReplicas  int    `json:"availableReplicas"`
+	WorkerPods         int    `json:"workerPods"`
+	ReadyPods          int    `json:"readyPods"`
+	Error              string `json:"error,omitempty"`
 }
 
 type previewRecord struct {
@@ -2202,7 +2220,7 @@ func (s *MemoryStore) hpaPeakSummaryLocked() hpaPeakSummary {
 
 func hpaPeakSummaryDefaults() hpaPeakSummary {
 	namespace := envDefault("POD_NAMESPACE", "woms")
-	return hpaPeakSummary{
+	summary := hpaPeakSummary{
 		Statuses:       map[string]int{},
 		Topic:          envDefault("KAFKA_SCHEDULE_TOPIC", "woms.schedule.jobs"),
 		ConsumerGroup:  envDefault("KAFKA_CONSUMER_GROUP", "woms-scheduler-workers"),
@@ -2211,6 +2229,134 @@ func hpaPeakSummaryDefaults() hpaPeakSummary {
 		Reason:         "幾百條產線同時進行月底排程，Kafka lag 上升時 KEDA 會擴充 scheduler-worker pods。",
 		WatchCommand:   fmt.Sprintf("kubectl get hpa,deploy,pod -n %s -w", namespace),
 	}
+	summary.Autoscaling = loadHPAAutoscalingState(namespace, summary.HPAName, summary.DeploymentName)
+	return summary
+}
+
+func loadHPAAutoscalingState(namespace, hpaName, deploymentName string) *hpaAutoscalingState {
+	host := strings.TrimSpace(os.Getenv("KUBERNETES_SERVICE_HOST"))
+	if host == "" {
+		return nil
+	}
+	port := envDefault("KUBERNETES_SERVICE_PORT", "443")
+	token, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token")
+	if err != nil {
+		return &hpaAutoscalingState{Error: "無法讀取 Kubernetes service account token：" + err.Error()}
+	}
+	ca, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
+	if err != nil {
+		return &hpaAutoscalingState{Error: "無法讀取 Kubernetes CA：" + err.Error()}
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(ca) {
+		return &hpaAutoscalingState{Error: "無法載入 Kubernetes CA。"}
+	}
+	client := &http.Client{
+		Timeout: 900 * time.Millisecond,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{
+			RootCAs:    roots,
+			ServerName: host,
+			MinVersion: tls.VersionTLS12,
+		}},
+	}
+	baseURL := "https://" + host + ":" + port
+	ctx, cancel := context.WithTimeout(context.Background(), 900*time.Millisecond)
+	defer cancel()
+
+	state := &hpaAutoscalingState{}
+	var messages []string
+	var hpa struct {
+		Spec struct {
+			MinReplicas *int `json:"minReplicas"`
+			MaxReplicas int  `json:"maxReplicas"`
+		} `json:"spec"`
+		Status struct {
+			CurrentReplicas int `json:"currentReplicas"`
+			DesiredReplicas int `json:"desiredReplicas"`
+		} `json:"status"`
+	}
+	if err := kubernetesGetJSON(ctx, client, baseURL, string(token), path.Join("/apis/autoscaling/v2/namespaces", namespace, "horizontalpodautoscalers", hpaName), &hpa); err != nil {
+		messages = append(messages, "HPA 狀態讀取失敗："+err.Error())
+	} else {
+		if hpa.Spec.MinReplicas != nil {
+			state.MinReplicas = *hpa.Spec.MinReplicas
+		}
+		state.MaxReplicas = hpa.Spec.MaxReplicas
+		state.CurrentReplicas = hpa.Status.CurrentReplicas
+		state.DesiredReplicas = hpa.Status.DesiredReplicas
+	}
+
+	var deployment struct {
+		Status struct {
+			Replicas          int `json:"replicas"`
+			ReadyReplicas     int `json:"readyReplicas"`
+			AvailableReplicas int `json:"availableReplicas"`
+		} `json:"status"`
+	}
+	if err := kubernetesGetJSON(ctx, client, baseURL, string(token), path.Join("/apis/apps/v1/namespaces", namespace, "deployments", deploymentName), &deployment); err != nil {
+		messages = append(messages, "Deployment 狀態讀取失敗："+err.Error())
+	} else {
+		state.DeploymentReplicas = deployment.Status.Replicas
+		state.ReadyReplicas = deployment.Status.ReadyReplicas
+		state.AvailableReplicas = deployment.Status.AvailableReplicas
+	}
+
+	labelSelector := envDefault("HPA_DEMO_POD_LABEL_SELECTOR", "app.kubernetes.io/component=scheduler-worker")
+	var pods struct {
+		Items []struct {
+			Status struct {
+				Phase      string `json:"phase"`
+				Conditions []struct {
+					Type   string `json:"type"`
+					Status string `json:"status"`
+				} `json:"conditions"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	podsPath := path.Join("/api/v1/namespaces", namespace, "pods") + "?labelSelector=" + queryEscape(labelSelector)
+	if err := kubernetesGetJSON(ctx, client, baseURL, string(token), podsPath, &pods); err != nil {
+		messages = append(messages, "Pod 狀態讀取失敗："+err.Error())
+	} else {
+		state.WorkerPods = len(pods.Items)
+		for _, pod := range pods.Items {
+			if pod.Status.Phase != "Running" {
+				continue
+			}
+			for _, condition := range pod.Status.Conditions {
+				if condition.Type == "Ready" && condition.Status == "True" {
+					state.ReadyPods++
+					break
+				}
+			}
+		}
+	}
+	if len(messages) > 0 {
+		state.Error = strings.Join(messages, "；")
+	}
+	return state
+}
+
+func kubernetesGetJSON(ctx context.Context, client *http.Client, baseURL, token, apiPath string, target any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+apiPath, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		return fmt.Errorf("%s %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	return json.NewDecoder(resp.Body).Decode(target)
+}
+
+func queryEscape(value string) string {
+	replacer := strings.NewReplacer("%", "%25", " ", "%20", ",", "%2C", "=", "%3D", "/", "%2F", ":", "%3A")
+	return replacer.Replace(value)
 }
 
 func envDefault(key, fallback string) string {

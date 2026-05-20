@@ -160,12 +160,14 @@ func processDBJob(ctx context.Context, db *sql.DB, lockProvider womslock.Provide
 	defer cancel()
 	lineLock, err := acquireLineLock(lockCtx, lockProvider, scheduleLineLockKey(job.LineID), lockTTL)
 	if err != nil {
+		message := "Redis 排程鎖取得失敗，等待重試：" + err.Error()
 		if lockCtx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			_ = markJobRetry(ctx, db, job.ID, "同產線排程鎖取得逾時，等待重試。")
-		} else {
-			_ = markJobRetry(ctx, db, job.ID, "Redis 排程鎖取得失敗，等待重試："+err.Error())
+			message = "同產線排程鎖取得逾時，等待重試。"
 		}
-		return err
+		if retryErr := markJobRetry(ctx, db, job.ID, message); retryErr != nil {
+			return retryErr
+		}
+		return nil
 	}
 	defer lineLock.Release(context.Background())
 	runCtx, stopRenewal := startLockRenewal(ctx, lineLock, lockTTL, lockRenewInterval)

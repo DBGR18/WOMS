@@ -6,6 +6,7 @@ const values = readFileSync(new URL("./values.yaml", import.meta.url), "utf8");
 const chart = readFileSync(new URL("./Chart.yaml", import.meta.url), "utf8");
 const scaledObject = readFileSync(new URL("./templates/keda-scaledobject.yaml", import.meta.url), "utf8");
 const apiDeployment = readFileSync(new URL("./templates/api-deployment.yaml", import.meta.url), "utf8");
+const apiRBAC = readFileSync(new URL("./templates/api-rbac.yaml", import.meta.url), "utf8");
 const workerDeployment = readFileSync(new URL("./templates/worker-deployment.yaml", import.meta.url), "utf8");
 const webDeployment = readFileSync(new URL("./templates/web-deployment.yaml", import.meta.url), "utf8");
 const services = readFileSync(new URL("./templates/services.yaml", import.meta.url), "utf8");
@@ -227,6 +228,8 @@ test("API and worker deployments expose PostgreSQL, Kafka, and retry env", () =>
   assert.match(apiDeployment, /name:\s+POD_NAMESPACE/);
   assert.match(apiDeployment, /name:\s+HPA_DEMO_HPA_NAME/);
   assert.match(apiDeployment, /name:\s+HPA_DEMO_DEPLOYMENT_NAME/);
+  assert.match(apiDeployment, /name:\s+HPA_DEMO_POD_LABEL_SELECTOR/);
+  assert.match(apiDeployment, /serviceAccountName:\s+\{\{ include "woms\.fullname" \. \}\}-api/);
   assert.match(apiDeployment, /name:\s+CORS_ALLOWED_ORIGIN/);
   assert.match(apiDeployment, /name:\s+AUTH_MODE/);
   assert.match(apiDeployment, /name:\s+AUTH_SESSION_STORE/);
@@ -246,6 +249,15 @@ test("API and worker deployments expose PostgreSQL, Kafka, and retry env", () =>
   assert.match(workerDeployment, /name:\s+WORKER_DEPENDENCY_RETRY_INTERVAL_MS/);
   assert.match(workerDeployment, /if not \.Values\.keda\.enabled/);
   assert.match(workerDeployment, /replicas:\s+\{\{ \.Values\.worker\.replicaCount \}\}/);
+});
+
+test("API can read worker autoscaling status for the HPA demo panel", () => {
+  assert.match(apiRBAC, /kind:\s+ServiceAccount/);
+  assert.match(apiRBAC, /name:\s+\{\{ include "woms\.fullname" \. \}\}-api/);
+  assert.match(apiRBAC, /resources:\s+\["pods"\][\s\S]*verbs:\s+\["get", "list"\]/);
+  assert.match(apiRBAC, /apiGroups:\s+\["apps"\][\s\S]*resources:\s+\["deployments"\][\s\S]*verbs:\s+\["get"\]/);
+  assert.match(apiRBAC, /apiGroups:\s+\["autoscaling"\][\s\S]*resources:\s+\["horizontalpodautoscalers"\][\s\S]*verbs:\s+\["get"\]/);
+  assert.match(apiRBAC, /kind:\s+RoleBinding/);
 });
 
 test("Ingress keeps login public while protecting API prefix", () => {

@@ -169,6 +169,7 @@ body:not([data-role="scheduler"]) .layout {
 }
 
 .hpa-metrics,
+.hpa-autoscaling,
 .hpa-status-grid,
 .button-row {
   display: flex;
@@ -177,11 +178,17 @@ body:not([data-role="scheduler"]) .layout {
 }
 
 .hpa-metrics span,
+.hpa-autoscaling span,
 .hpa-status-grid span {
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 6px 8px;
   background: #fff;
+}
+
+.hpa-autoscaling span {
+  background: #eef9f6;
+  border-color: #b9dcd4;
 }
 
 .hpa-metadata {
