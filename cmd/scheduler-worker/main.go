@@ -220,6 +220,9 @@ func processDBJobLocked(ctx context.Context, db *sql.DB, job domain.ScheduleJob,
 
 	var status domain.ScheduleJobStatus
 	if err := tx.QueryRowContext(ctx, "SELECT status FROM schedule_jobs WHERE id = $1 FOR UPDATE", job.ID).Scan(&status); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return tx.Commit()
+		}
 		return err
 	}
 	if status == domain.JobCancelled {

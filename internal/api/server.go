@@ -592,13 +592,7 @@ func (s *Server) handleHPAPeakDemo(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		for _, job := range s.store.HPAPeakJobs() {
-			if err := s.publisher.PublishScheduleJob(r.Context(), job); err != nil {
-				_, _ = s.store.ClearHPAPeakDemo(claims)
-				writeError(w, http.StatusBadGateway, "排程任務送出失敗，請稍後再試。")
-				return
-			}
-		}
+		s.publishHPAPeakJobs(s.store.HPAPeakJobs())
 		writeJSON(w, http.StatusAccepted, hpaPeakResponse{Summary: summary})
 	case http.MethodDelete:
 		summary, err := s.store.ClearHPAPeakDemo(claims)
@@ -610,6 +604,23 @@ func (s *Server) handleHPAPeakDemo(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+func (s *Server) publishHPAPeakJobs(jobs []domain.ScheduleJob) {
+	if len(jobs) == 0 {
+		return
+	}
+	go func() {
+		for _, job := range jobs {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			err := s.publisher.PublishScheduleJob(ctx, job)
+			cancel()
+			if err != nil {
+				log.Printf("hpa peak schedule job publish failed id=%s: %v", job.ID, err)
+				return
+			}
+		}
+	}()
 }
 
 func (s *Server) handleScheduleCalendar(w http.ResponseWriter, r *http.Request) {
