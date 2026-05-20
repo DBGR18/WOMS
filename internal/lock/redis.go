@@ -11,6 +11,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -28,6 +29,9 @@ type Lock interface {
 type RedisProvider struct {
 	addr    string
 	timeout time.Duration
+	mu      sync.Mutex
+	conn    net.Conn
+	reader  *bufio.Reader
 }
 
 func NewRedisProvider(addr string) *RedisProvider {
@@ -70,21 +74,52 @@ func (p *RedisProvider) command(ctx context.Context, args ...string) (string, er
 	if p.addr == "" {
 		return "", errors.New("REDIS_ADDR 不可為空")
 	}
-	var dialer net.Dialer
-	conn, err := dialer.DialContext(ctx, "tcp", p.addr)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.commandLocked(ctx, args...)
+}
+
+func (p *RedisProvider) commandLocked(ctx context.Context, args ...string) (string, error) {
+	conn, err := p.connLocked(ctx)
 	if err != nil {
 		return "", err
 	}
-	defer conn.Close()
 	deadline := time.Now().Add(p.timeout)
 	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
 		deadline = ctxDeadline
 	}
 	_ = conn.SetDeadline(deadline)
 	if _, err := conn.Write(command(args...)); err != nil {
+		p.closeLocked()
 		return "", err
 	}
-	return readValue(bufio.NewReader(conn))
+	value, err := readValue(p.reader)
+	if err != nil && !errors.Is(err, ErrNotAcquired) {
+		p.closeLocked()
+	}
+	return value, err
+}
+
+func (p *RedisProvider) connLocked(ctx context.Context) (net.Conn, error) {
+	if p.conn != nil {
+		return p.conn, nil
+	}
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "tcp", p.addr)
+	if err != nil {
+		return nil, err
+	}
+	p.conn = conn
+	p.reader = bufio.NewReader(conn)
+	return conn, nil
+}
+
+func (p *RedisProvider) closeLocked() {
+	if p.conn != nil {
+		_ = p.conn.Close()
+	}
+	p.conn = nil
+	p.reader = nil
 }
 
 type redisLock struct {

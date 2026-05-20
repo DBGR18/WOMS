@@ -93,6 +93,9 @@ func (s *MemoryTokenSessionStore) Close() error {
 type RedisTokenSessionStore struct {
 	addr    string
 	timeout time.Duration
+	mu      sync.Mutex
+	conn    net.Conn
+	reader  *bufio.Reader
 }
 
 func NewRedisTokenSessionStore(addr string) *RedisTokenSessionStore {
@@ -146,6 +149,9 @@ func (s *RedisTokenSessionStore) Revoke(ctx context.Context, token string) error
 }
 
 func (s *RedisTokenSessionStore) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closeLocked()
 	return nil
 }
 
@@ -153,21 +159,52 @@ func (s *RedisTokenSessionStore) command(ctx context.Context, args ...string) (s
 	if s.addr == "" {
 		return "", errors.New("REDIS_ADDR 不可為空")
 	}
-	var dialer net.Dialer
-	conn, err := dialer.DialContext(ctx, "tcp", s.addr)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.commandLocked(ctx, args...)
+}
+
+func (s *RedisTokenSessionStore) commandLocked(ctx context.Context, args ...string) (string, error) {
+	conn, err := s.connLocked(ctx)
 	if err != nil {
 		return "", err
 	}
-	defer conn.Close()
 	deadline := time.Now().Add(s.timeout)
 	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
 		deadline = ctxDeadline
 	}
 	_ = conn.SetDeadline(deadline)
 	if _, err := conn.Write(redisCommand(args...)); err != nil {
+		s.closeLocked()
 		return "", err
 	}
-	return readRedisValue(bufio.NewReader(conn))
+	value, err := readRedisValue(s.reader)
+	if err != nil && !errors.Is(err, ErrTokenSessionNotFound) {
+		s.closeLocked()
+	}
+	return value, err
+}
+
+func (s *RedisTokenSessionStore) connLocked(ctx context.Context) (net.Conn, error) {
+	if s.conn != nil {
+		return s.conn, nil
+	}
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "tcp", s.addr)
+	if err != nil {
+		return nil, err
+	}
+	s.conn = conn
+	s.reader = bufio.NewReader(conn)
+	return conn, nil
+}
+
+func (s *RedisTokenSessionStore) closeLocked() {
+	if s.conn != nil {
+		_ = s.conn.Close()
+	}
+	s.conn = nil
+	s.reader = nil
 }
 
 func redisCommand(args ...string) []byte {

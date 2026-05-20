@@ -1,6 +1,9 @@
 package auth
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestPasswordHashVerifiesAndRejectsWrongPassword(t *testing.T) {
 	hash, err := HashPassword("temporary-secret")
@@ -9,6 +12,9 @@ func TestPasswordHashVerifiesAndRejectsWrongPassword(t *testing.T) {
 	}
 	if hash == "temporary-secret" {
 		t.Fatal("expected password hash to differ from password")
+	}
+	if !strings.HasPrefix(hash, bcryptHashPrefix) {
+		t.Fatalf("expected bcrypt hash prefix, got %q", hash)
 	}
 	if !VerifyPassword(hash, "temporary-secret") {
 		t.Fatal("expected hash to verify correct password")
@@ -24,5 +30,20 @@ func TestVerifyPasswordSupportsLegacyDemoPasswords(t *testing.T) {
 	}
 	if VerifyPassword("demo", "wrong") {
 		t.Fatal("expected legacy demo password to reject wrong password")
+	}
+}
+
+func TestVerifyPasswordSupportsBoundedLegacySHA256Hashes(t *testing.T) {
+	hash, err := legacySHA256Hash("temporary-secret")
+	if err != nil {
+		t.Fatalf("legacy hash password: %v", err)
+	}
+	if !VerifyPassword(hash, "temporary-secret") {
+		t.Fatal("expected bounded legacy sha256 hash to verify")
+	}
+	parts := strings.Split(hash, "$")
+	parts[1] = "300001"
+	if VerifyPassword(strings.Join(parts, "$"), "temporary-secret") {
+		t.Fatal("expected excessive legacy sha256 iterations to be rejected")
 	}
 }

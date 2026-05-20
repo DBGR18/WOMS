@@ -141,26 +141,8 @@ type Store interface {
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	setSecurityHeaders(w, s.corsAllowedOrigin)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-
-	// Expose Prometheus metrics endpoint (unauthenticated, for scraping).
-	if r.Method == http.MethodGet && r.URL.Path == "/metrics" {
-		metrics.Handler().ServeHTTP(w, r)
-		return
-	}
-	if strings.HasPrefix(r.URL.Path, "/api/") && !isPublicAPIPath(r) {
-		claims, err := s.claimsFromRequest(r)
-		if err != nil {
-			writeError(w, http.StatusUnauthorized, "unauthorized")
-			return
-		}
-		r = r.WithContext(context.WithValue(r.Context(), claimsContextKey{}, claims))
-	}
-
-	// Wrap the writer to capture the response status for HTTPRequestsTotal.
+	// Wrap the writer before auth gating so unauthorized API requests are
+	// included in HTTPRequestsTotal.
 	rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 	defer func() {
 		metrics.HTTPRequestsTotal.WithLabelValues(
@@ -169,6 +151,25 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			strconv.Itoa(rec.status),
 		).Inc()
 	}()
+
+	if r.Method == http.MethodOptions {
+		rec.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	// Expose Prometheus metrics endpoint (unauthenticated, for scraping).
+	if r.Method == http.MethodGet && r.URL.Path == "/metrics" {
+		metrics.Handler().ServeHTTP(rec, r)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/api/") && !isPublicAPIPath(r) {
+		claims, err := s.claimsFromRequest(r)
+		if err != nil {
+			writeError(rec, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		r = r.WithContext(context.WithValue(r.Context(), claimsContextKey{}, claims))
+	}
 
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/healthz":
@@ -294,6 +295,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = claims
+	metrics.CurrentOnlineUserCount.Dec()
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

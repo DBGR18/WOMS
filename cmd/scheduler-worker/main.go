@@ -155,7 +155,7 @@ func processDBJob(ctx context.Context, db *sql.DB, lockProvider womslock.Provide
 	}
 	lockCtx, cancel := context.WithTimeout(ctx, lockTimeout)
 	defer cancel()
-	lineLock, err := lockProvider.Acquire(lockCtx, scheduleLineLockKey(job.LineID), lockTTL)
+	lineLock, err := acquireLineLock(lockCtx, lockProvider, scheduleLineLockKey(job.LineID), lockTTL)
 	if err != nil {
 		_ = markJobRetry(ctx, db, job.ID, "同產線排程鎖取得逾時，等待重試。")
 		return err
@@ -164,6 +164,26 @@ func processDBJob(ctx context.Context, db *sql.DB, lockProvider womslock.Provide
 	runCtx, stopRenewal := startLockRenewal(ctx, lineLock, lockTTL, lockRenewInterval)
 	defer stopRenewal()
 	return processDBJobLocked(runCtx, db, job, maxRetries)
+}
+
+func acquireLineLock(ctx context.Context, provider womslock.Provider, key string, ttl time.Duration) (womslock.Lock, error) {
+	retry := 200 * time.Millisecond
+	for {
+		lineLock, err := provider.Acquire(ctx, key, ttl)
+		if err == nil {
+			return lineLock, nil
+		}
+		if !errors.Is(err, womslock.ErrNotAcquired) {
+			return nil, err
+		}
+		timer := time.NewTimer(retry)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func processDBJobLocked(ctx context.Context, db *sql.DB, job domain.ScheduleJob, maxRetries int) error {

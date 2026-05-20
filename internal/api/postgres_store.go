@@ -564,7 +564,13 @@ func (s *PostgresStore) DeleteUser(username, actorID string) (domain.User, error
 	`, user.ID).Scan(&references); err != nil {
 		return domain.User{}, err
 	}
-	if references == 0 {
+	if references == 0 && actorID != user.ID {
+		if _, err := s.db.Exec(`
+			INSERT INTO audit_logs (id, actor_id, action, resource, reason, created_at)
+			VALUES ($1, $2, 'user.delete', $3, '', NOW())
+		`, auditID("AUD-USER-"+user.ID), actorID, user.ID); err != nil {
+			return domain.User{}, err
+		}
 		if _, err := s.db.Exec("DELETE FROM users WHERE id = $1", user.ID); err != nil {
 			return domain.User{}, err
 		}
