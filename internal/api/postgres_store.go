@@ -54,18 +54,18 @@ func (s *PostgresStore) Close() error {
 func (s *PostgresStore) Authenticate(username, password string) (domain.User, bool) {
 	var user domain.User
 	err := s.db.QueryRow(`
-		SELECT id, username, password_hash, role, COALESCE(line_id, '')
+		SELECT id, username, password_hash, role, COALESCE(line_id, ''), disabled
 		FROM users
-		WHERE username = $1
-	`, username).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.LineID)
-	if err != nil || password == "" || password != user.PasswordHash {
+		WHERE username = $1 AND disabled = FALSE
+	`, username).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.LineID, &user.Disabled)
+	if err != nil || !auth.VerifyPassword(user.PasswordHash, password) {
 		return domain.User{}, false
 	}
 	return user, true
 }
 
 func (s *PostgresStore) ListUsers() []domain.User {
-	rows, err := s.db.Query("SELECT id, username, password_hash, role, COALESCE(line_id, '') FROM users ORDER BY username")
+	rows, err := s.db.Query("SELECT id, username, password_hash, role, COALESCE(line_id, ''), disabled FROM users ORDER BY username")
 	if err != nil {
 		return s.MemoryStore.ListUsers()
 	}
@@ -73,11 +73,55 @@ func (s *PostgresStore) ListUsers() []domain.User {
 	users := []domain.User{}
 	for rows.Next() {
 		var user domain.User
-		if err := rows.Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.LineID); err == nil {
+		if err := rows.Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.LineID, &user.Disabled); err == nil {
 			users = append(users, user)
 		}
 	}
 	return users
+}
+
+func (s *PostgresStore) CreateUser(req createUserRequest, actorID string) (domain.User, error) {
+	username := strings.TrimSpace(req.Username)
+	if err := validateUsername(username); err != nil {
+		return domain.User{}, err
+	}
+	lines := map[string]domain.ProductionLine{}
+	for _, line := range s.ListLines() {
+		lines[line.ID] = line
+	}
+	if err := validateUserRole(req.Role, req.LineID, lines); err != nil {
+		return domain.User{}, err
+	}
+	if req.Role != domain.RoleScheduler {
+		req.LineID = ""
+	}
+	passwordHash, err := auth.HashPassword(req.Password)
+	if err != nil {
+		return domain.User{}, err
+	}
+	user := domain.User{
+		ID:           "user-" + username,
+		Username:     username,
+		PasswordHash: passwordHash,
+		Role:         req.Role,
+		LineID:       req.LineID,
+	}
+	err = s.db.QueryRow(`
+		INSERT INTO users (id, username, password_hash, role, line_id, disabled)
+		VALUES ($1, $2, $3, $4, NULLIF($5, ''), FALSE)
+		RETURNING id, username, password_hash, role, COALESCE(line_id, ''), disabled
+	`, user.ID, user.Username, user.PasswordHash, user.Role, user.LineID).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.LineID, &user.Disabled)
+	if err != nil {
+		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "unique") {
+			return domain.User{}, errors.New("username already exists")
+		}
+		return domain.User{}, err
+	}
+	_, _ = s.db.Exec(`
+		INSERT INTO audit_logs (id, actor_id, action, resource, reason, created_at)
+		VALUES ($1, $2, 'user.create', $3, $4, NOW())
+	`, auditID("AUD-USER-"+user.ID), actorID, user.ID, string(req.Role)+" "+req.LineID)
+	return user, nil
 }
 
 func (s *PostgresStore) ListLines() []domain.ProductionLine {
@@ -459,8 +503,8 @@ func (s *PostgresStore) AssignUser(req assignUserRequest, actorID string) (domai
 	err := s.db.QueryRow(`
 		UPDATE users SET role = $2, line_id = NULLIF($3, '')
 		WHERE username = $1
-		RETURNING id, username, password_hash, role, COALESCE(line_id, '')
-	`, req.Username, req.Role, req.LineID).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.LineID)
+		RETURNING id, username, password_hash, role, COALESCE(line_id, ''), disabled
+	`, req.Username, req.Role, req.LineID).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.LineID, &user.Disabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.User{}, errors.New("user not found")
 	}
@@ -471,6 +515,74 @@ func (s *PostgresStore) AssignUser(req assignUserRequest, actorID string) (domai
 		INSERT INTO audit_logs (id, actor_id, action, resource, reason, created_at)
 		VALUES ($1, $2, 'user.assign', $3, $4, NOW())
 	`, auditID("AUD-USER-"+user.ID), actorID, user.ID, string(req.Role)+" "+req.LineID)
+	return user, nil
+}
+
+func (s *PostgresStore) ResetUserPassword(req resetUserPasswordRequest, actorID string) (domain.User, error) {
+	passwordHash, err := auth.HashPassword(req.Password)
+	if err != nil {
+		return domain.User{}, err
+	}
+	var user domain.User
+	err = s.db.QueryRow(`
+		UPDATE users SET password_hash = $2
+		WHERE username = $1
+		RETURNING id, username, password_hash, role, COALESCE(line_id, ''), disabled
+	`, strings.TrimSpace(req.Username), passwordHash).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.LineID, &user.Disabled)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.User{}, errors.New("user not found")
+	}
+	if err != nil {
+		return domain.User{}, err
+	}
+	_, _ = s.db.Exec(`
+		INSERT INTO audit_logs (id, actor_id, action, resource, reason, created_at)
+		VALUES ($1, $2, 'user.reset_password', $3, '', NOW())
+	`, auditID("AUD-USER-"+user.ID), actorID, user.ID)
+	return user, nil
+}
+
+func (s *PostgresStore) DeleteUser(username, actorID string) (domain.User, error) {
+	username = strings.TrimSpace(username)
+	var user domain.User
+	err := s.db.QueryRow(`
+		SELECT id, username, password_hash, role, COALESCE(line_id, ''), disabled
+		FROM users WHERE username = $1
+	`, username).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.LineID, &user.Disabled)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.User{}, errors.New("user not found")
+	}
+	if err != nil {
+		return domain.User{}, err
+	}
+	var references int
+	if err := s.db.QueryRow(`
+		SELECT
+			(SELECT COUNT(*) FROM orders WHERE created_by = $1 OR rejected_by = $1) +
+			(SELECT COUNT(*) FROM audit_logs WHERE actor_id = $1) +
+			(SELECT COUNT(*) FROM schedule_previews WHERE actor_id = $1)
+	`, user.ID).Scan(&references); err != nil {
+		return domain.User{}, err
+	}
+	if references == 0 {
+		if _, err := s.db.Exec("DELETE FROM users WHERE id = $1", user.ID); err != nil {
+			return domain.User{}, err
+		}
+		user.Disabled = true
+		return user, nil
+	}
+	err = s.db.QueryRow(`
+		UPDATE users SET disabled = TRUE
+		WHERE id = $1
+		RETURNING id, username, password_hash, role, COALESCE(line_id, ''), disabled
+	`, user.ID).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.LineID, &user.Disabled)
+	if err != nil {
+		return domain.User{}, err
+	}
+	_, _ = s.db.Exec(`
+		INSERT INTO audit_logs (id, actor_id, action, resource, reason, created_at)
+		VALUES ($1, $2, 'user.disable', $3, '', NOW())
+	`, auditID("AUD-USER-"+user.ID), actorID, user.ID)
 	return user, nil
 }
 

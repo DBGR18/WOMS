@@ -1,0 +1,226 @@
+package api
+
+import (
+	"bufio"
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/d11nn/woms/internal/auth"
+)
+
+var ErrTokenSessionNotFound = errors.New("token session not found")
+
+type TokenSessionStore interface {
+	Save(ctx context.Context, token string, claims auth.Claims) error
+	Verify(ctx context.Context, token string, claims auth.Claims) error
+	Revoke(ctx context.Context, token string) error
+	Close() error
+}
+
+type NoopTokenSessionStore struct{}
+
+func (NoopTokenSessionStore) Save(context.Context, string, auth.Claims) error {
+	return nil
+}
+
+func (NoopTokenSessionStore) Verify(context.Context, string, auth.Claims) error {
+	return nil
+}
+
+func (NoopTokenSessionStore) Revoke(context.Context, string) error {
+	return nil
+}
+
+func (NoopTokenSessionStore) Close() error {
+	return nil
+}
+
+type MemoryTokenSessionStore struct {
+	mu       sync.Mutex
+	sessions map[string]time.Time
+}
+
+func NewMemoryTokenSessionStore() *MemoryTokenSessionStore {
+	return &MemoryTokenSessionStore{sessions: map[string]time.Time{}}
+}
+
+func (s *MemoryTokenSessionStore) Save(_ context.Context, token string, claims auth.Claims) error {
+	expires := time.Unix(claims.Expires, 0)
+	if token == "" || !expires.After(time.Now()) {
+		return ErrTokenSessionNotFound
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions[tokenSessionKey(token)] = expires
+	return nil
+}
+
+func (s *MemoryTokenSessionStore) Verify(_ context.Context, token string, _ auth.Claims) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := tokenSessionKey(token)
+	expires, ok := s.sessions[key]
+	if !ok {
+		return ErrTokenSessionNotFound
+	}
+	if !expires.After(time.Now()) {
+		delete(s.sessions, key)
+		return ErrTokenSessionNotFound
+	}
+	return nil
+}
+
+func (s *MemoryTokenSessionStore) Revoke(_ context.Context, token string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.sessions, tokenSessionKey(token))
+	return nil
+}
+
+func (s *MemoryTokenSessionStore) Close() error {
+	return nil
+}
+
+type RedisTokenSessionStore struct {
+	addr    string
+	timeout time.Duration
+}
+
+func NewRedisTokenSessionStore(addr string) *RedisTokenSessionStore {
+	return &RedisTokenSessionStore{
+		addr:    strings.TrimSpace(addr),
+		timeout: 2 * time.Second,
+	}
+}
+
+func (s *RedisTokenSessionStore) Ping(ctx context.Context) error {
+	value, err := s.command(ctx, "PING")
+	if err != nil {
+		return err
+	}
+	if value != "PONG" {
+		return fmt.Errorf("unexpected redis PING response: %s", value)
+	}
+	return nil
+}
+
+func (s *RedisTokenSessionStore) Save(ctx context.Context, token string, claims auth.Claims) error {
+	ttl := time.Until(time.Unix(claims.Expires, 0))
+	if token == "" || ttl <= 0 {
+		return ErrTokenSessionNotFound
+	}
+	seconds := int(ttl.Seconds())
+	if seconds < 1 {
+		seconds = 1
+	}
+	_, err := s.command(ctx, "SET", tokenSessionKey(token), "1", "EX", strconv.Itoa(seconds))
+	return err
+}
+
+func (s *RedisTokenSessionStore) Verify(ctx context.Context, token string, _ auth.Claims) error {
+	value, err := s.command(ctx, "GET", tokenSessionKey(token))
+	if err != nil {
+		if errors.Is(err, ErrTokenSessionNotFound) {
+			return err
+		}
+		return err
+	}
+	if value != "1" {
+		return ErrTokenSessionNotFound
+	}
+	return nil
+}
+
+func (s *RedisTokenSessionStore) Revoke(ctx context.Context, token string) error {
+	_, err := s.command(ctx, "DEL", tokenSessionKey(token))
+	return err
+}
+
+func (s *RedisTokenSessionStore) Close() error {
+	return nil
+}
+
+func (s *RedisTokenSessionStore) command(ctx context.Context, args ...string) (string, error) {
+	if s.addr == "" {
+		return "", errors.New("REDIS_ADDR 不可為空")
+	}
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "tcp", s.addr)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+	deadline := time.Now().Add(s.timeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	_ = conn.SetDeadline(deadline)
+	if _, err := conn.Write(redisCommand(args...)); err != nil {
+		return "", err
+	}
+	return readRedisValue(bufio.NewReader(conn))
+}
+
+func redisCommand(args ...string) []byte {
+	var b strings.Builder
+	b.WriteString("*")
+	b.WriteString(strconv.Itoa(len(args)))
+	b.WriteString("\r\n")
+	for _, arg := range args {
+		b.WriteString("$")
+		b.WriteString(strconv.Itoa(len(arg)))
+		b.WriteString("\r\n")
+		b.WriteString(arg)
+		b.WriteString("\r\n")
+	}
+	return []byte(b.String())
+}
+
+func readRedisValue(r *bufio.Reader) (string, error) {
+	prefix, err := r.ReadByte()
+	if err != nil {
+		return "", err
+	}
+	line, err := r.ReadString('\n')
+	if err != nil {
+		return "", err
+	}
+	line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+	switch prefix {
+	case '+':
+		return line, nil
+	case '-':
+		return "", errors.New(line)
+	case ':':
+		return line, nil
+	case '$':
+		length, err := strconv.Atoi(line)
+		if err != nil {
+			return "", err
+		}
+		if length < 0 {
+			return "", ErrTokenSessionNotFound
+		}
+		buf := make([]byte, length+2)
+		if _, err := io.ReadFull(r, buf); err != nil {
+			return "", err
+		}
+		return string(buf[:length]), nil
+	default:
+		return "", fmt.Errorf("unsupported redis response prefix %q", prefix)
+	}
+}
+
+func tokenSessionKey(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return "woms:auth:token:" + base64.RawURLEncoding.EncodeToString(sum[:])
+}

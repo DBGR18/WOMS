@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -34,24 +35,57 @@ var nowUTC = func() time.Time {
 }
 
 type Server struct {
-	jwtSecret string
-	store     Store
-	publisher ScheduleJobPublisher
+	jwtSecret         string
+	store             Store
+	publisher         ScheduleJobPublisher
+	tokenSessions     TokenSessionStore
+	corsAllowedOrigin string
+	authMode          string
 }
+
+type ServerConfig struct {
+	TokenSessions     TokenSessionStore
+	CORSAllowedOrigin string
+	AuthMode          string
+}
+
+type claimsContextKey struct{}
 
 func NewServer(jwtSecret string, store *MemoryStore) *Server {
 	return NewServerWithPublisher(jwtSecret, store, NoopScheduleJobPublisher{})
 }
 
 func NewServerWithPublisher(jwtSecret string, store Store, publisher ScheduleJobPublisher) *Server {
+	return NewServerWithPublisherAndConfig(jwtSecret, store, publisher, ServerConfig{})
+}
+
+func NewServerWithPublisherAndConfig(jwtSecret string, store Store, publisher ScheduleJobPublisher, config ServerConfig) *Server {
 	if store == nil {
 		store = NewMemoryStore()
 	}
 	if publisher == nil {
 		publisher = NoopScheduleJobPublisher{}
 	}
+	if config.TokenSessions == nil {
+		config.TokenSessions = NoopTokenSessionStore{}
+	}
+	corsAllowedOrigin := strings.TrimSpace(config.CORSAllowedOrigin)
+	if corsAllowedOrigin == "" {
+		corsAllowedOrigin = "*"
+	}
+	authMode := strings.ToLower(strings.TrimSpace(config.AuthMode))
+	if authMode == "" {
+		authMode = "local"
+	}
 	metrics.Register()
-	return &Server{jwtSecret: jwtSecret, store: store, publisher: publisher}
+	return &Server{
+		jwtSecret:         jwtSecret,
+		store:             store,
+		publisher:         publisher,
+		tokenSessions:     config.TokenSessions,
+		corsAllowedOrigin: corsAllowedOrigin,
+		authMode:          authMode,
+	}
 }
 
 // statusRecorder wraps http.ResponseWriter to capture the HTTP status code
@@ -85,7 +119,10 @@ type Store interface {
 	RejectOrders(req rejectOrdersRequest, claims auth.Claims) (rejectOrdersResponse, error)
 	ResubmitOrder(req resubmitOrderRequest, claims auth.Claims) (domain.Order, error)
 	ListUsers() []domain.User
+	CreateUser(req createUserRequest, actorID string) (domain.User, error)
 	AssignUser(req assignUserRequest, actorID string) (domain.User, error)
+	ResetUserPassword(req resetUserPasswordRequest, actorID string) (domain.User, error)
+	DeleteUser(username, actorID string) (domain.User, error)
 	CreateDemoConflictOrders(req demoConflictRequest, claims auth.Claims) ([]domain.Order, error)
 	PreviewSchedule(req scheduleRequest, claims auth.Claims) (schedulePreviewResponse, error)
 	CreateScheduleJob(req scheduleRequest, claims auth.Claims) (domain.ScheduleJob, error)
@@ -103,7 +140,7 @@ type Store interface {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	setSecurityHeaders(w)
+	setSecurityHeaders(w, s.corsAllowedOrigin)
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -113,6 +150,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet && r.URL.Path == "/metrics" {
 		metrics.Handler().ServeHTTP(w, r)
 		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/api/") && !isPublicAPIPath(r) {
+		claims, err := s.claimsFromRequest(r)
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		r = r.WithContext(context.WithValue(r.Context(), claimsContextKey{}, claims))
 	}
 
 	// Wrap the writer to capture the response status for HTTPRequestsTotal.
@@ -132,6 +177,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(rec, http.StatusOK, map[string]string{"status": "ready"})
 	case r.Method == http.MethodPost && r.URL.Path == "/api/auth/login":
 		s.handleLogin(rec, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/auth/logout":
+		s.handleLogout(rec, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/internal/auth/verify":
 		s.handleIngressAuth(rec, r)
 	case r.URL.Path == "/api/orders":
@@ -146,6 +193,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleResubmitOrder(rec, r)
 	case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/orders/"):
 		s.handleUpdateOrder(rec, r)
+	case r.Method == http.MethodPatch && r.URL.Path == "/api/users/password":
+		s.handleResetUserPassword(rec, r)
+	case strings.HasPrefix(r.URL.Path, "/api/users/"):
+		s.handleUserByUsername(rec, r)
 	case r.URL.Path == "/api/users":
 		s.handleUsers(rec, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/demo/conflict-orders":
@@ -187,13 +238,23 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
-	token, err := auth.CreateToken(s.jwtSecret, auth.Claims{
+	claims := auth.Claims{
 		Subject: user.ID,
 		Role:    user.Role,
 		LineID:  user.LineID,
-	}, 8*time.Hour)
+	}
+	token, err := auth.CreateToken(s.jwtSecret, claims, 8*time.Hour)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	claims, err = auth.VerifyToken(s.jwtSecret, token)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := s.tokenSessions.Save(r.Context(), token, claims); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "auth session store unavailable")
 		return
 	}
 	metrics.CurrentOnlineUserCount.Inc()
@@ -204,11 +265,36 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleIngressAuth(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.claimsFromRequest(r); err != nil {
+	claims, err := s.claimsFromRequest(r)
+	if err != nil {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
+	w.Header().Set("X-User-ID", claims.Subject)
+	w.Header().Set("X-User-Role", string(claims.Role))
+	if claims.LineID != "" {
+		w.Header().Set("X-User-Line", claims.LineID)
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	token, err := auth.BearerToken(r.Header.Get("Authorization"))
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	claims, err := auth.VerifyToken(s.jwtSecret, token)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if err := s.tokenSessions.Revoke(r.Context(), token); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "auth session store unavailable")
+		return
+	}
+	_ = claims
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (s *Server) handleOrders(w http.ResponseWriter, r *http.Request) {
@@ -344,6 +430,18 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		writeJSON(w, http.StatusOK, map[string]any{"users": s.store.ListUsers()})
+	case http.MethodPost:
+		var req createUserRequest
+		if err := readJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		user, err := s.store.CreateUser(req, claims.Subject)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, user)
 	case http.MethodPatch:
 		var req assignUserRequest
 		if err := readJSON(r, &req); err != nil {
@@ -359,6 +457,56 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+func (s *Server) handleResetUserPassword(w http.ResponseWriter, r *http.Request) {
+	claims, err := s.claimsFromRequest(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if claims.Role != domain.RoleAdmin {
+		writeError(w, http.StatusForbidden, "only admin can manage accounts")
+		return
+	}
+	var req resetUserPasswordRequest
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	user, err := s.store.ResetUserPassword(req, claims.Subject)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, user)
+}
+
+func (s *Server) handleUserByUsername(w http.ResponseWriter, r *http.Request) {
+	claims, err := s.claimsFromRequest(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if claims.Role != domain.RoleAdmin {
+		writeError(w, http.StatusForbidden, "only admin can manage accounts")
+		return
+	}
+	username := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/api/users/"))
+	if username == "" || strings.Contains(username, "/") {
+		writeError(w, http.StatusNotFound, "route not found")
+		return
+	}
+	if r.Method != http.MethodDelete {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	user, err := s.store.DeleteUser(username, claims.Subject)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, user)
 }
 
 func (s *Server) handleDemoConflictOrders(w http.ResponseWriter, r *http.Request) {
@@ -551,11 +699,28 @@ func (s *Server) handleProductionConfirm(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) claimsFromRequest(r *http.Request) (auth.Claims, error) {
+	if claims, ok := r.Context().Value(claimsContextKey{}).(auth.Claims); ok {
+		return claims, nil
+	}
+	if s.authMode != "local" && s.authMode != "edge" {
+		return auth.Claims{}, auth.ErrInvalidToken
+	}
 	token, err := auth.BearerToken(r.Header.Get("Authorization"))
 	if err != nil {
 		return auth.Claims{}, err
 	}
-	return auth.VerifyToken(s.jwtSecret, token)
+	claims, err := auth.VerifyToken(s.jwtSecret, token)
+	if err != nil {
+		return auth.Claims{}, err
+	}
+	if err := s.tokenSessions.Verify(r.Context(), token, claims); err != nil {
+		return auth.Claims{}, err
+	}
+	return claims, nil
+}
+
+func isPublicAPIPath(r *http.Request) bool {
+	return r.Method == http.MethodPost && r.URL.Path == "/api/auth/login"
 }
 
 type MemoryStore struct {
@@ -608,7 +773,7 @@ func (s *MemoryStore) Authenticate(username, password string) (domain.User, bool
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	user, ok := s.users[username]
-	if !ok || password == "" || password != user.PasswordHash {
+	if !ok || user.Disabled || !auth.VerifyPassword(user.PasswordHash, password) {
 		return domain.User{}, false
 	}
 	return user, true
@@ -658,6 +823,18 @@ type assignUserRequest struct {
 	Username string      `json:"username"`
 	Role     domain.Role `json:"role"`
 	LineID   string      `json:"lineId"`
+}
+
+type createUserRequest struct {
+	Username string      `json:"username"`
+	Password string      `json:"password"`
+	Role     domain.Role `json:"role"`
+	LineID   string      `json:"lineId"`
+}
+
+type resetUserPasswordRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
 type confirmPreviewRequest struct {
@@ -1010,6 +1187,93 @@ func (s *MemoryStore) AssignUser(req assignUserRequest, actorID string) (domain.
 	user.LineID = req.LineID
 	s.users[user.Username] = user
 	s.auditLocked(actorID, "user.assign", user.ID, string(req.Role)+" "+req.LineID)
+	return user, nil
+}
+
+func (s *MemoryStore) CreateUser(req createUserRequest, actorID string) (domain.User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	username := strings.TrimSpace(req.Username)
+	if err := validateUsername(username); err != nil {
+		return domain.User{}, err
+	}
+	if _, exists := s.users[username]; exists {
+		return domain.User{}, errors.New("username already exists")
+	}
+	if err := validateUserRole(req.Role, req.LineID, s.lines); err != nil {
+		return domain.User{}, err
+	}
+	if req.Role != domain.RoleScheduler {
+		req.LineID = ""
+	}
+	passwordHash, err := auth.HashPassword(req.Password)
+	if err != nil {
+		return domain.User{}, err
+	}
+	user := domain.User{
+		ID:           "user-" + username,
+		Username:     username,
+		PasswordHash: passwordHash,
+		Role:         req.Role,
+		LineID:       req.LineID,
+	}
+	s.users[user.Username] = user
+	s.auditLocked(actorID, "user.create", user.ID, string(req.Role)+" "+req.LineID)
+	return user, nil
+}
+
+func (s *MemoryStore) ResetUserPassword(req resetUserPasswordRequest, actorID string) (domain.User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	user, ok := s.users[strings.TrimSpace(req.Username)]
+	if !ok {
+		return domain.User{}, errors.New("user not found")
+	}
+	passwordHash, err := auth.HashPassword(req.Password)
+	if err != nil {
+		return domain.User{}, err
+	}
+	user.PasswordHash = passwordHash
+	s.users[user.Username] = user
+	s.auditLocked(actorID, "user.reset_password", user.ID, "")
+	return user, nil
+}
+
+func (s *MemoryStore) DeleteUser(username, actorID string) (domain.User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	username = strings.TrimSpace(username)
+	user, ok := s.users[username]
+	if !ok {
+		return domain.User{}, errors.New("user not found")
+	}
+	referenced := false
+	for _, order := range s.orders {
+		if order.CreatedBy == user.ID || order.RejectedBy == user.ID {
+			referenced = true
+			break
+		}
+	}
+	if !referenced {
+		for _, audit := range s.audits {
+			if audit.ActorID == user.ID {
+				referenced = true
+				break
+			}
+		}
+	}
+	if referenced {
+		user.Disabled = true
+		s.users[username] = user
+		s.auditLocked(actorID, "user.disable", user.ID, "")
+		return user, nil
+	}
+	delete(s.users, username)
+	s.auditLocked(actorID, "user.delete", user.ID, "")
+	user.Disabled = true
 	return user, nil
 }
 
@@ -2073,6 +2337,34 @@ func validateOrderFields(customer string, quantity int, note string) error {
 	return nil
 }
 
+func validateUsername(username string) error {
+	if username == "" {
+		return errors.New("username is required")
+	}
+	if len(username) > 40 {
+		return errors.New("username must be 40 characters or fewer")
+	}
+	for _, r := range username {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			continue
+		}
+		return errors.New("username can contain only letters, numbers, dash, underscore, or dot")
+	}
+	return nil
+}
+
+func validateUserRole(role domain.Role, lineID string, lines map[string]domain.ProductionLine) error {
+	if role != domain.RoleAdmin && role != domain.RoleSales && role != domain.RoleScheduler {
+		return errors.New("role must be admin, sales, or scheduler")
+	}
+	if role == domain.RoleScheduler {
+		if _, ok := lines[lineID]; !ok {
+			return errors.New("scheduler lineId must be A, B, C, or D")
+		}
+	}
+	return nil
+}
+
 func validateFutureDueDate(value string, currentDate time.Time) (time.Time, error) {
 	dueDate, err := time.Parse(dateLayout, value)
 	if err != nil {
@@ -2277,71 +2569,77 @@ func zhUserMessage(message string) string {
 		return "找不到訂單：" + strings.TrimPrefix(message, "order not found: ")
 	}
 	translations := map[string]string{
-		"route not found":                                              "找不到 API 路由。",
-		"method not allowed":                                           "不支援此 HTTP 方法。",
-		"invalid credentials":                                          "帳號或密碼錯誤。",
-		"unauthorized":                                                 "請先登入後再操作。",
-		"only sales can create orders":                                 "只有業務可以建立訂單。",
-		"only sales can confirm preview orders":                        "只有業務可以確認訂單預覽。",
-		"only schedulers can reject orders":                            "只有排程工程師可以駁回訂單。",
-		"only sales can resubmit rejected orders":                      "只有業務可以重新送出被駁回的訂單。",
-		"only admin can manage accounts":                               "只有管理員可以管理帳號。",
-		"only admin or schedulers can create demo conflict orders":     "只有管理員或排程工程師可以建立衝突展示訂單。",
-		"only schedulers can create schedule jobs":                     "只有排程工程師可以建立排程任務。",
-		"schedule job not found":                                       "找不到排程任務。",
-		"only schedulers can confirm production":                       "只有排程工程師可以回報生產。",
-		"only schedulers can start production":                         "只有排程工程師可以開始生產。",
-		"order not found":                                              "找不到訂單。",
-		"cannot update another production line":                        "不能更新其他產線的訂單。",
-		"sales can update only their own orders":                       "業務只能更新自己的訂單。",
-		"role cannot update orders":                                    "此角色不能更新訂單。",
-		"only pending or rejected orders can change order details":     "只有待排程或需業務處理的訂單可以變更內容。",
-		"note cannot be updated after order creation":                  "備註建立後不能修改。",
-		"dueDate must use YYYY-MM-DD":                                  "交期格式必須是 YYYY-MM-DD。",
-		"quantity must be between 25 and 2500":                         "數量必須介於 25 到 2500。",
-		"production line does not exist":                               "產線不存在。",
-		"priority must be low or high":                                 "優先級必須是 low 或 high。",
-		"orderIds is required":                                         "請至少選取一張訂單。",
-		"rejection reason is required":                                 "請填寫駁回理由。",
-		"rejection reason must be 240 characters or fewer":             "駁回理由最多 240 個字。",
-		"cannot reject another production line":                        "不能駁回其他產線的訂單。",
-		"only pending orders can be rejected":                          "只有待排程訂單可以被駁回。",
-		"sales can resubmit only their own orders":                     "只能重新送出自己的訂單。",
-		"only rejected orders can be resubmitted":                      "只有需業務處理的訂單可以重新送出。",
-		"sales can delete only their own orders":                       "業務只能刪除自己的訂單。",
-		"cannot delete another production line":                        "不能刪除其他產線的訂單。",
-		"role cannot delete orders":                                    "此角色不能刪除訂單。",
-		"cannot delete in-progress or completed orders":                "不能刪除生產中或已完成的訂單。",
-		"user not found":                                               "找不到使用者。",
-		"role must be admin, sales, or scheduler":                      "角色必須是 admin、sales 或 scheduler。",
-		"scheduler lineId must be A, B, C, or D":                       "排程工程師的產線必須存在。",
-		"previewId is required before creating a schedule job":         "建立排程任務前必須先完成試排。",
-		"preview result expired or not found":                          "試排結果已過期或不存在。",
-		"preview result belongs to another user":                       "試排結果屬於其他使用者。",
-		"schedule request changed after preview":                       "排程請求與試排內容不同，請重新試排。",
-		"cannot schedule another production line":                      "不能排程其他產線。",
-		"lineId is required":                                           "請選擇產線。",
-		"cannot access another production line":                        "不能存取其他產線。",
-		"month must use YYYY-MM":                                       "月份格式必須是 YYYY-MM。",
-		"only admin or schedulers can read schedule history":           "只有管理員或排程工程師可以讀取排程紀錄。",
-		"only scheduled orders can start production":                   "只有已排程訂單可以開始生產。",
-		"scheduled order has no allocation":                            "已排程訂單沒有分配紀錄。",
-		"cannot start another production line":                         "不能開始其他產線的生產。",
-		"cannot confirm another production line":                       "不能回報其他產線的生產。",
-		"only in-progress orders can be confirmed":                     "只有生產中訂單可以回報生產。",
-		"producedQuantity must be greater than zero":                   "完成片數必須大於 0。",
-		"productionDate must use YYYY-MM-DD":                           "生產日期格式必須是 YYYY-MM-DD。",
-		"scheduled allocation not found for productionDate":            "找不到該生產日期的排程。",
-		"productionDate has already been confirmed":                    "該生產日期已經回報過。",
-		"producedQuantity cannot exceed scheduled allocation quantity": "完成片數不能超過本日排程量。",
-		"manual force requires a reason":                               "人工介入必須填寫原因。",
-		"startDate must use YYYY-MM-DD":                                "開始日期格式必須是 YYYY-MM-DD。",
-		"currentDate must use YYYY-MM-DD":                              "目前日期格式必須是 YYYY-MM-DD。",
-		"only sales can preview draft orders":                          "只有業務可以試排草稿訂單。",
-		"draft order line must match preview line":                     "草稿訂單產線必須符合試排產線。",
-		"draft previews cannot include resolution orders":              "草稿試排不能包含解法訂單。",
-		"resolution order not found":                                   "找不到解法訂單。",
-		"resolution order line must match preview line":                "解法訂單產線必須符合試排產線。",
+		"route not found":                                                      "找不到 API 路由。",
+		"method not allowed":                                                   "不支援此 HTTP 方法。",
+		"invalid credentials":                                                  "帳號或密碼錯誤。",
+		"auth session store unavailable":                                       "登入狀態服務暫時無法使用，請稍後再試。",
+		"unauthorized":                                                         "請先登入後再操作。",
+		"only sales can create orders":                                         "只有業務可以建立訂單。",
+		"only sales can confirm preview orders":                                "只有業務可以確認訂單預覽。",
+		"only schedulers can reject orders":                                    "只有排程工程師可以駁回訂單。",
+		"only sales can resubmit rejected orders":                              "只有業務可以重新送出被駁回的訂單。",
+		"only admin can manage accounts":                                       "只有管理員可以管理帳號。",
+		"only admin or schedulers can create demo conflict orders":             "只有管理員或排程工程師可以建立衝突展示訂單。",
+		"only schedulers can create schedule jobs":                             "只有排程工程師可以建立排程任務。",
+		"schedule job not found":                                               "找不到排程任務。",
+		"only schedulers can confirm production":                               "只有排程工程師可以回報生產。",
+		"only schedulers can start production":                                 "只有排程工程師可以開始生產。",
+		"order not found":                                                      "找不到訂單。",
+		"cannot update another production line":                                "不能更新其他產線的訂單。",
+		"sales can update only their own orders":                               "業務只能更新自己的訂單。",
+		"role cannot update orders":                                            "此角色不能更新訂單。",
+		"only pending or rejected orders can change order details":             "只有待排程或需業務處理的訂單可以變更內容。",
+		"note cannot be updated after order creation":                          "備註建立後不能修改。",
+		"dueDate must use YYYY-MM-DD":                                          "交期格式必須是 YYYY-MM-DD。",
+		"quantity must be between 25 and 2500":                                 "數量必須介於 25 到 2500。",
+		"production line does not exist":                                       "產線不存在。",
+		"priority must be low or high":                                         "優先級必須是 low 或 high。",
+		"orderIds is required":                                                 "請至少選取一張訂單。",
+		"rejection reason is required":                                         "請填寫駁回理由。",
+		"rejection reason must be 240 characters or fewer":                     "駁回理由最多 240 個字。",
+		"cannot reject another production line":                                "不能駁回其他產線的訂單。",
+		"only pending orders can be rejected":                                  "只有待排程訂單可以被駁回。",
+		"sales can resubmit only their own orders":                             "只能重新送出自己的訂單。",
+		"only rejected orders can be resubmitted":                              "只有需業務處理的訂單可以重新送出。",
+		"sales can delete only their own orders":                               "業務只能刪除自己的訂單。",
+		"cannot delete another production line":                                "不能刪除其他產線的訂單。",
+		"role cannot delete orders":                                            "此角色不能刪除訂單。",
+		"cannot delete in-progress or completed orders":                        "不能刪除生產中或已完成的訂單。",
+		"user not found":                                                       "找不到使用者。",
+		"username is required":                                                 "請填寫帳號。",
+		"username already exists":                                              "帳號已存在。",
+		"username must be 40 characters or fewer":                              "帳號最多 40 個字。",
+		"username can contain only letters, numbers, dash, underscore, or dot": "帳號只能包含英文字母、數字、連字號、底線或句點。",
+		"password is required":                                                 "請填寫密碼。",
+		"role must be admin, sales, or scheduler":                              "角色必須是 admin、sales 或 scheduler。",
+		"scheduler lineId must be A, B, C, or D":                               "排程工程師的產線必須存在。",
+		"previewId is required before creating a schedule job":                 "建立排程任務前必須先完成試排。",
+		"preview result expired or not found":                                  "試排結果已過期或不存在。",
+		"preview result belongs to another user":                               "試排結果屬於其他使用者。",
+		"schedule request changed after preview":                               "排程請求與試排內容不同，請重新試排。",
+		"cannot schedule another production line":                              "不能排程其他產線。",
+		"lineId is required":                                                   "請選擇產線。",
+		"cannot access another production line":                                "不能存取其他產線。",
+		"month must use YYYY-MM":                                               "月份格式必須是 YYYY-MM。",
+		"only admin or schedulers can read schedule history":                   "只有管理員或排程工程師可以讀取排程紀錄。",
+		"only scheduled orders can start production":                           "只有已排程訂單可以開始生產。",
+		"scheduled order has no allocation":                                    "已排程訂單沒有分配紀錄。",
+		"cannot start another production line":                                 "不能開始其他產線的生產。",
+		"cannot confirm another production line":                               "不能回報其他產線的生產。",
+		"only in-progress orders can be confirmed":                             "只有生產中訂單可以回報生產。",
+		"producedQuantity must be greater than zero":                           "完成片數必須大於 0。",
+		"productionDate must use YYYY-MM-DD":                                   "生產日期格式必須是 YYYY-MM-DD。",
+		"scheduled allocation not found for productionDate":                    "找不到該生產日期的排程。",
+		"productionDate has already been confirmed":                            "該生產日期已經回報過。",
+		"producedQuantity cannot exceed scheduled allocation quantity":         "完成片數不能超過本日排程量。",
+		"manual force requires a reason":                                       "人工介入必須填寫原因。",
+		"startDate must use YYYY-MM-DD":                                        "開始日期格式必須是 YYYY-MM-DD。",
+		"currentDate must use YYYY-MM-DD":                                      "目前日期格式必須是 YYYY-MM-DD。",
+		"only sales can preview draft orders":                                  "只有業務可以試排草稿訂單。",
+		"draft order line must match preview line":                             "草稿訂單產線必須符合試排產線。",
+		"draft previews cannot include resolution orders":                      "草稿試排不能包含解法訂單。",
+		"resolution order not found":                                           "找不到解法訂單。",
+		"resolution order line must match preview line":                        "解法訂單產線必須符合試排產線。",
 		"resolution orders must be low-priority scheduled orders without locked or completed allocations": "解法訂單必須是低優先級、已排程、且沒有鎖定或已完成分配的訂單。",
 		"preview does not contain a draft order":                                                          "試排結果不包含草稿訂單。",
 		"cannot create demo orders for another production line":                                           "不能為其他產線建立展示訂單。",
@@ -2366,8 +2664,11 @@ func containsCJK(value string) bool {
 	return false
 }
 
-func setSecurityHeaders(w http.ResponseWriter) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+func setSecurityHeaders(w http.ResponseWriter, corsAllowedOrigin string) {
+	if corsAllowedOrigin == "" {
+		corsAllowedOrigin = "*"
+	}
+	w.Header().Set("Access-Control-Allow-Origin", corsAllowedOrigin)
 	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 	w.Header().Set("Content-Security-Policy", "default-src 'self'")

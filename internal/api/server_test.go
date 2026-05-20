@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/d11nn/woms/internal/auth"
 	"github.com/d11nn/woms/internal/domain"
 )
 
@@ -51,8 +52,79 @@ func TestAPIErrorMessagesAreZhTW(t *testing.T) {
 	}
 }
 
-func TestIngressAuthAcceptsValidToken(t *testing.T) {
+func TestSecurityHeadersUseConfiguredCORSOrigin(t *testing.T) {
+	server := NewServerWithPublisherAndConfig("secret", NewMemoryStore(), NoopScheduleJobPublisher{}, ServerConfig{
+		CORSAllowedOrigin: "https://woms.example.com",
+	})
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	res := httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if got := res.Header().Get("Access-Control-Allow-Origin"); got != "https://woms.example.com" {
+		t.Fatalf("expected configured CORS origin, got %q", got)
+	}
+	if got := res.Header().Get("X-Frame-Options"); got != "DENY" {
+		t.Fatalf("expected X-Frame-Options DENY, got %q", got)
+	}
+}
+
+func TestBusinessAPIsRequireBearerToken(t *testing.T) {
 	server := NewServer("secret", NewMemoryStore())
+	cases := []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodGet, "/api/orders", ""},
+		{http.MethodPost, "/api/orders", `{"customer":"A","lineId":"A","quantity":100,"priority":"low","dueDate":"2026-05-06"}`},
+		{http.MethodGet, "/api/lines", ""},
+		{http.MethodGet, "/api/users", ""},
+		{http.MethodPost, "/api/schedules/preview", `{"lineId":"A","startDate":"2026-05-01"}`},
+		{http.MethodGet, "/api/schedules/calendar?lineId=A&month=2026-05", ""},
+		{http.MethodPost, "/api/production/start", `{"orderId":"ORD-0000001"}`},
+	}
+	for _, tt := range cases {
+		req := httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body))
+		req.Header.Set("X-User-Role", "admin")
+		res := httptest.NewRecorder()
+		server.ServeHTTP(res, req)
+		if res.Code != http.StatusUnauthorized {
+			t.Fatalf("%s %s expected 401, got %d body=%s", tt.method, tt.path, res.Code, res.Body.String())
+		}
+	}
+}
+
+func TestEdgeModeAcceptsSignedTokenButRejectsPlainHeaders(t *testing.T) {
+	server := NewServerWithPublisherAndConfig("edge-secret", NewMemoryStore(), NoopScheduleJobPublisher{}, ServerConfig{
+		AuthMode: "edge",
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/orders", nil)
+	req.Header.Set("X-User-ID", "user-admin")
+	req.Header.Set("X-User-Role", "admin")
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("expected unsigned edge headers to fail, got %d %s", res.Code, res.Body.String())
+	}
+
+	token, err := auth.CreateToken("edge-secret", auth.Claims{Subject: "user-sales", Role: domain.RoleSales}, time.Hour)
+	if err != nil {
+		t.Fatalf("create edge token: %v", err)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/orders", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected signed edge token to pass, got %d %s", res.Code, res.Body.String())
+	}
+}
+
+func TestIngressAuthAcceptsValidToken(t *testing.T) {
+	server := NewServerWithPublisherAndConfig("secret", NewMemoryStore(), NoopScheduleJobPublisher{}, ServerConfig{
+		TokenSessions: NewMemoryTokenSessionStore(),
+	})
 	token := login(t, server, "sales", "demo")
 	req := httptest.NewRequest(http.MethodGet, "/internal/auth/verify", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -62,6 +134,36 @@ func TestIngressAuthAcceptsValidToken(t *testing.T) {
 
 	if res.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d body=%s", res.Code, res.Body.String())
+	}
+	if got := res.Header().Get("X-User-ID"); got != "user-sales" {
+		t.Fatalf("expected ingress auth user id header, got %q", got)
+	}
+	if got := res.Header().Get("X-User-Role"); got != string(domain.RoleSales) {
+		t.Fatalf("expected ingress auth role header, got %q", got)
+	}
+}
+
+func TestLogoutRevokesTokenSession(t *testing.T) {
+	sessions := NewMemoryTokenSessionStore()
+	server := NewServerWithPublisherAndConfig("secret", NewMemoryStore(), NoopScheduleJobPublisher{}, ServerConfig{
+		TokenSessions: sessions,
+	})
+	token := login(t, server, "sales", "demo")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected logout 200, got %d body=%s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/internal/auth/verify", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("expected revoked token to fail verify, got %d body=%s", res.Code, res.Body.String())
 	}
 }
 
@@ -376,6 +478,82 @@ func TestOnlyAdminCanAssignUsers(t *testing.T) {
 
 	if res.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestAdminCanCreateResetAndDeleteUser(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	admin := login(t, server, "admin", "demo")
+
+	body := bytes.NewBufferString(`{"username":"new-sales","password":"temporary","role":"sales"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/users", body)
+	req.Header.Set("Authorization", "Bearer "+admin)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("expected create user 201, got %d %s", res.Code, res.Body.String())
+	}
+	if strings.Contains(res.Body.String(), "PasswordHash") || strings.Contains(res.Body.String(), "temporary") {
+		t.Fatalf("create user response leaked password material: %s", res.Body.String())
+	}
+
+	newSales := login(t, server, "new-sales", "temporary")
+	body = bytes.NewBufferString(`{"customer":"Class Demo","lineId":"A","quantity":100,"priority":"low","dueDate":"2026-05-06"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/orders", body)
+	req.Header.Set("Authorization", "Bearer "+newSales)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("expected new sales user to create order, got %d %s", res.Code, res.Body.String())
+	}
+
+	body = bytes.NewBufferString(`{"username":"new-sales","password":"rotated"}`)
+	req = httptest.NewRequest(http.MethodPatch, "/api/users/password", body)
+	req.Header.Set("Authorization", "Bearer "+admin)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected reset password 200, got %d %s", res.Code, res.Body.String())
+	}
+	_ = login(t, server, "new-sales", "rotated")
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/users/new-sales", nil)
+	req.Header.Set("Authorization", "Bearer "+admin)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected delete user 200, got %d %s", res.Code, res.Body.String())
+	}
+
+	body = bytes.NewBufferString(`{"username":"new-sales","password":"rotated"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/auth/login", body)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("expected deleted/disabled user login to fail, got %d %s", res.Code, res.Body.String())
+	}
+}
+
+func TestCreateUserRequiresAdminAndSchedulerLine(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	sales := login(t, server, "sales", "demo")
+	body := bytes.NewBufferString(`{"username":"new-scheduler","password":"temporary","role":"scheduler","lineId":"A"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/users", body)
+	req.Header.Set("Authorization", "Bearer "+sales)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("expected non-admin create user 403, got %d %s", res.Code, res.Body.String())
+	}
+
+	admin := login(t, server, "admin", "demo")
+	body = bytes.NewBufferString(`{"username":"new-scheduler","password":"temporary","role":"scheduler"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/users", body)
+	req.Header.Set("Authorization", "Bearer "+admin)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("expected scheduler without line to fail, got %d %s", res.Code, res.Body.String())
 	}
 }
 

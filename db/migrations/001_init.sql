@@ -3,7 +3,8 @@ CREATE TABLE IF NOT EXISTS users (
     username TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL CHECK (role IN ('admin', 'sales', 'scheduler')),
-    line_id TEXT
+    line_id TEXT,
+    disabled BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE TABLE IF NOT EXISTS production_lines (
@@ -105,6 +106,7 @@ WHERE status IS NULL;
 
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
 ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('admin', 'sales', 'scheduler'));
+ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_status_check;
 ALTER TABLE orders ADD CONSTRAINT orders_status_check CHECK (status IN ('待排程', '已排程', '生產中', '已完成', '需業務處理'));
 ALTER TABLE schedule_jobs DROP CONSTRAINT IF EXISTS schedule_jobs_status_check;

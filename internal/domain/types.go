@@ -33,6 +33,7 @@ type User struct {
 	PasswordHash string `json:"-"`
 	Role         Role   `json:"role"`
 	LineID       string `json:"lineId,omitempty"`
+	Disabled     bool   `json:"disabled,omitempty"`
 }
 
 type ProductionLine struct {

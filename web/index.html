@@ -92,8 +92,37 @@
         <section id="admin-panel" class="admin-panel" hidden>
           <div>
             <p class="eyebrow">Admin</p>
-            <h3>帳號指派</h3>
+            <h3>帳號管理</h3>
           </div>
+          <form id="create-user-form" class="inline-form">
+            <label>
+              <span>新帳號</span>
+              <input name="username" autocomplete="off">
+            </label>
+            <label>
+              <span>臨時密碼</span>
+              <input name="password" type="password" autocomplete="new-password">
+            </label>
+            <label>
+              <span>角色</span>
+              <select name="role">
+                <option value="sales">業務</option>
+                <option value="scheduler">排程工程師</option>
+                <option value="admin">管理員</option>
+              </select>
+            </label>
+            <label>
+              <span>產線</span>
+              <select name="lineId">
+                <option value="">無</option>
+                <option>A</option>
+                <option>B</option>
+                <option>C</option>
+                <option>D</option>
+              </select>
+            </label>
+            <button type="submit">建立帳號</button>
+          </form>
           <form id="assign-user-form" class="inline-form">
             <label>
               <span>帳號</span>
@@ -118,6 +147,18 @@
               </select>
             </label>
             <button type="submit">更新帳號</button>
+            <button id="delete-user-button" class="secondary-button" type="button">刪除/停用</button>
+          </form>
+          <form id="reset-password-form" class="inline-form">
+            <label>
+              <span>帳號</span>
+              <select name="username" id="reset-password-username"></select>
+            </label>
+            <label>
+              <span>新密碼</span>
+              <input name="password" type="password" autocomplete="new-password">
+            </label>
+            <button type="submit">重設密碼</button>
           </form>
           <div class="hpa-demo-panel">
             <div>

@@ -74,6 +74,12 @@ func VerifyToken(secret, token string) (Claims, error) {
 	if claims.Subject == "" || claims.Role == "" {
 		return claims, ErrInvalidToken
 	}
+	if claims.Role != domain.RoleAdmin && claims.Role != domain.RoleSales && claims.Role != domain.RoleScheduler {
+		return claims, ErrInvalidToken
+	}
+	if claims.Role == domain.RoleScheduler && strings.TrimSpace(claims.LineID) == "" {
+		return claims, ErrInvalidToken
+	}
 	if time.Now().Unix() >= claims.Expires {
 		return claims, ErrExpiredToken
 	}

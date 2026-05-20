@@ -86,6 +86,9 @@ document.getElementById("login-form").addEventListener("submit", async (event) =
 });
 
 document.getElementById("logout-button").addEventListener("click", () => {
+  if (state.token) {
+    request("/api/auth/logout", { method: "POST" }).catch(() => {});
+  }
   clearSession();
   renderAuthState();
   renderWorkspace();
@@ -132,6 +135,51 @@ document.getElementById("assign-user-form").addEventListener("submit", async (ev
     await loadUsers();
   } catch (error) {
     showMessage("帳號更新失敗", error.message, "warn");
+  }
+});
+
+document.getElementById("create-user-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const data = Object.fromEntries(new FormData(event.currentTarget));
+    const user = await request("/api/users", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    event.currentTarget.reset();
+    showMessage("帳號已建立", `${user.username} 可用 ${roleLabel(user.role)} 權限登入`);
+    await loadUsers();
+  } catch (error) {
+    showMessage("帳號建立失敗", error.message, "warn");
+  }
+});
+
+document.getElementById("reset-password-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const data = Object.fromEntries(new FormData(event.currentTarget));
+    const user = await request("/api/users/password", {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+    event.currentTarget.reset();
+    showMessage("密碼已重設", `${user.username} 可以使用新密碼登入`);
+  } catch (error) {
+    showMessage("密碼重設失敗", error.message, "warn");
+  }
+});
+
+document.getElementById("delete-user-button").addEventListener("click", async () => {
+  const username = document.getElementById("assign-username").value;
+  if (!username || !window.confirm(`確定要刪除或停用 ${username} 嗎？`)) {
+    return;
+  }
+  try {
+    const user = await request(`/api/users/${encodeURIComponent(username)}`, { method: "DELETE" });
+    showMessage("帳號已處理", user.disabled ? `${user.username} 已停用` : `${username} 已刪除`);
+    await loadUsers();
+  } catch (error) {
+    showMessage("帳號刪除失敗", error.message, "warn");
   }
 });
 
@@ -595,8 +643,10 @@ function renderAuthState() {
 function renderUsers() {
   const select = document.getElementById("assign-username");
   select.innerHTML = state.users.map((user) => `
-    <option value="${escapeHtml(user.username)}">${escapeHtml(user.username)} (${roleLabel(user.role)}${user.lineId ? `/${escapeHtml(user.lineId)}` : ""})</option>
+    <option value="${escapeHtml(user.username)}">${escapeHtml(user.username)} (${roleLabel(user.role)}${user.lineId ? `/${escapeHtml(user.lineId)}` : ""}${user.disabled ? "，停用" : ""})</option>
   `).join("");
+  const resetSelect = document.getElementById("reset-password-username");
+  resetSelect.innerHTML = select.innerHTML;
 }
 
 function renderHPAPeakLoading(message) {

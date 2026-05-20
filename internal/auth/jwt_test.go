@@ -50,3 +50,27 @@ func TestVerifyTokenRejectsExpiredToken(t *testing.T) {
 		t.Fatalf("expected ErrExpiredToken, got %v", err)
 	}
 }
+
+func TestVerifyTokenRejectsInvalidRole(t *testing.T) {
+	token, err := CreateToken("secret", Claims{Subject: "user-1", Role: domain.Role("owner")}, time.Hour)
+	if err != nil {
+		t.Fatalf("CreateToken returned error: %v", err)
+	}
+
+	_, err = VerifyToken("secret", token)
+	if !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("expected ErrInvalidToken, got %v", err)
+	}
+}
+
+func TestVerifyTokenRejectsSchedulerWithoutLine(t *testing.T) {
+	token, err := CreateToken("secret", Claims{Subject: "user-1", Role: domain.RoleScheduler}, time.Hour)
+	if err != nil {
+		t.Fatalf("CreateToken returned error: %v", err)
+	}
+
+	_, err = VerifyToken("secret", token)
+	if !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("expected ErrInvalidToken, got %v", err)
+	}
+}
