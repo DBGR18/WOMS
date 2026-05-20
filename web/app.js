@@ -489,9 +489,15 @@ configureLineForUser();
 renderAuthState();
 if (state.token) {
   refreshWorkspace().catch((error) => {
-    clearSession();
     renderAuthState();
-    showMessage("登入狀態已失效", error.message, "warn");
+    if (error.status === 401) {
+      clearSession();
+      renderAuthState();
+      showMessage("登入狀態已失效", error.message, "warn");
+      return;
+    }
+    renderWorkspace();
+    showMessage("工作區重新整理失敗", error.message, "warn");
   });
 } else {
   renderWorkspace();
@@ -1796,9 +1802,17 @@ async function request(path, options = {}, needsAuth = true) {
       clearSession();
       renderAuthState();
     }
-    throw new Error(payload.error ?? "請求失敗，請稍後再試。");
+    throw new RequestError(payload.error ?? "請求失敗，請稍後再試。", response.status);
   }
   return payload;
+}
+
+class RequestError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.name = "RequestError";
+    this.status = status;
+  }
 }
 
 function saveSession(token, user) {
