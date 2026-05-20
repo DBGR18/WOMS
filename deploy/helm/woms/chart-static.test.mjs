@@ -222,7 +222,11 @@ test("API and worker deployments expose PostgreSQL, Kafka, and retry env", () =>
   assert.match(apiDeployment, /name:\s+API_STORE/);
   assert.match(apiDeployment, /name:\s+DATABASE_URL/);
   assert.match(apiDeployment, /name:\s+KAFKA_SCHEDULE_TOPIC/);
+  assert.match(apiDeployment, /name:\s+KAFKA_CONSUMER_GROUP/);
   assert.match(apiDeployment, /name:\s+KAFKA_PUBLISH_ENABLED/);
+  assert.match(apiDeployment, /name:\s+POD_NAMESPACE/);
+  assert.match(apiDeployment, /name:\s+HPA_DEMO_HPA_NAME/);
+  assert.match(apiDeployment, /name:\s+HPA_DEMO_DEPLOYMENT_NAME/);
   assert.match(apiDeployment, /name:\s+CORS_ALLOWED_ORIGIN/);
   assert.match(apiDeployment, /name:\s+AUTH_MODE/);
   assert.match(apiDeployment, /name:\s+AUTH_SESSION_STORE/);

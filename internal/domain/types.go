@@ -34,6 +34,7 @@ type User struct {
 	Role         Role   `json:"role"`
 	LineID       string `json:"lineId,omitempty"`
 	Disabled     bool   `json:"disabled,omitempty"`
+	Deleted      bool   `json:"deleted,omitempty"`
 }
 
 type ProductionLine struct {

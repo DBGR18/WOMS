@@ -524,6 +524,9 @@ func TestAdminCanCreateResetAndDeleteUser(t *testing.T) {
 	if res.Code != http.StatusOK {
 		t.Fatalf("expected delete user 200, got %d %s", res.Code, res.Body.String())
 	}
+	if !strings.Contains(res.Body.String(), `"disabled":true`) || strings.Contains(res.Body.String(), `"deleted":true`) {
+		t.Fatalf("expected referenced user to be disabled, got %s", res.Body.String())
+	}
 
 	body = bytes.NewBufferString(`{"username":"new-sales","password":"rotated"}`)
 	req = httptest.NewRequest(http.MethodPost, "/api/auth/login", body)
@@ -531,6 +534,31 @@ func TestAdminCanCreateResetAndDeleteUser(t *testing.T) {
 	server.ServeHTTP(res, req)
 	if res.Code != http.StatusUnauthorized {
 		t.Fatalf("expected deleted/disabled user login to fail, got %d %s", res.Code, res.Body.String())
+	}
+}
+
+func TestAdminDeleteUnreferencedUserReportsDeleted(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	admin := login(t, server, "admin", "demo")
+
+	body := bytes.NewBufferString(`{"username":"unused-sales","password":"temporary","role":"sales"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/users", body)
+	req.Header.Set("Authorization", "Bearer "+admin)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("expected create user 201, got %d %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/users/unused-sales", nil)
+	req.Header.Set("Authorization", "Bearer "+admin)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected delete user 200, got %d %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), `"deleted":true`) || strings.Contains(res.Body.String(), `"disabled":true`) {
+		t.Fatalf("expected unreferenced user to be deleted, got %s", res.Body.String())
 	}
 }
 

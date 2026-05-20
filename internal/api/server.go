@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -246,19 +248,23 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	token, err := auth.CreateToken(s.jwtSecret, claims, 8*time.Hour)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("create auth token failed user=%s error=%v", user.Username, err)
+		writeError(w, http.StatusInternalServerError, "登入服務暫時不可用。")
 		return
 	}
 	claims, err = auth.VerifyToken(s.jwtSecret, token)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("verify generated auth token failed user=%s error=%v", user.Username, err)
+		writeError(w, http.StatusInternalServerError, "登入服務暫時不可用。")
 		return
 	}
 	if err := s.tokenSessions.Save(r.Context(), token, claims); err != nil {
 		writeError(w, http.StatusServiceUnavailable, "auth session store unavailable")
 		return
 	}
-	metrics.CurrentOnlineUserCount.Inc()
+	if s.tokenSessions.TracksSessions() {
+		metrics.CurrentOnlineUserCount.Inc()
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"token": token,
 		"user":  user,
@@ -285,17 +291,18 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	claims, err := auth.VerifyToken(s.jwtSecret, token)
-	if err != nil {
+	if _, err := auth.VerifyToken(s.jwtSecret, token); err != nil {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	if err := s.tokenSessions.Revoke(r.Context(), token); err != nil {
+	revoked, err := s.tokenSessions.Revoke(r.Context(), token)
+	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "auth session store unavailable")
 		return
 	}
-	_ = claims
-	metrics.CurrentOnlineUserCount.Dec()
+	if revoked && s.tokenSessions.TracksSessions() {
+		metrics.CurrentOnlineUserCount.Dec()
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -1269,13 +1276,24 @@ func (s *MemoryStore) DeleteUser(username, actorID string) (domain.User, error) 
 	}
 	if referenced {
 		user.Disabled = true
+		user.Deleted = false
 		s.users[username] = user
 		s.auditLocked(actorID, "user.disable", user.ID, "")
 		return user, nil
 	}
+	for _, preview := range s.previews {
+		if preview.ActorID == user.ID {
+			user.Disabled = true
+			user.Deleted = false
+			s.users[username] = user
+			s.auditLocked(actorID, "user.disable", user.ID, "")
+			return user, nil
+		}
+	}
 	delete(s.users, username)
 	s.auditLocked(actorID, "user.delete", user.ID, "")
-	user.Disabled = true
+	user.Disabled = false
+	user.Deleted = true
 	return user, nil
 }
 
@@ -2134,6 +2152,7 @@ func (s *MemoryStore) resetHPAPeakDemoLocked(actorID string) {
 }
 
 func (s *MemoryStore) hpaPeakSummaryLocked() hpaPeakSummary {
+	summary := hpaPeakSummaryDefaults()
 	statuses := map[string]int{
 		string(domain.JobQueued):    0,
 		string(domain.JobRunning):   0,
@@ -2172,20 +2191,34 @@ func (s *MemoryStore) hpaPeakSummaryLocked() hpaPeakSummary {
 	if len(recentJobs) > 10 {
 		recentJobs = recentJobs[:10]
 	}
+	summary.LineCount = len(lineIDs)
+	summary.OrderCount = orderCount
+	summary.JobCount = statuses[string(domain.JobQueued)] + statuses[string(domain.JobRunning)] + statuses[string(domain.JobCompleted)] + statuses[string(domain.JobFailed)] + statuses[string(domain.JobCancelled)]
+	summary.Statuses = statuses
+	summary.FailedMessages = failedMessages
+	summary.RecentJobs = recentJobs
+	return summary
+}
+
+func hpaPeakSummaryDefaults() hpaPeakSummary {
+	namespace := envDefault("POD_NAMESPACE", "woms")
 	return hpaPeakSummary{
-		LineCount:      len(lineIDs),
-		OrderCount:     orderCount,
-		JobCount:       statuses[string(domain.JobQueued)] + statuses[string(domain.JobRunning)] + statuses[string(domain.JobCompleted)] + statuses[string(domain.JobFailed)] + statuses[string(domain.JobCancelled)],
-		Statuses:       statuses,
-		Topic:          "woms.schedule.jobs",
-		ConsumerGroup:  "woms-scheduler-workers",
-		HPAName:        "woms-woms-worker-hpa",
-		DeploymentName: "woms-woms-worker",
+		Statuses:       map[string]int{},
+		Topic:          envDefault("KAFKA_SCHEDULE_TOPIC", "woms.schedule.jobs"),
+		ConsumerGroup:  envDefault("KAFKA_CONSUMER_GROUP", "woms-scheduler-workers"),
+		HPAName:        envDefault("HPA_DEMO_HPA_NAME", "woms-woms-worker-hpa"),
+		DeploymentName: envDefault("HPA_DEMO_DEPLOYMENT_NAME", "woms-woms-worker"),
 		Reason:         "幾百條產線同時進行月底排程，Kafka lag 上升時 KEDA 會擴充 scheduler-worker pods。",
-		WatchCommand:   "kubectl get hpa,deploy,pod -n woms -w",
-		FailedMessages: failedMessages,
-		RecentJobs:     recentJobs,
+		WatchCommand:   fmt.Sprintf("kubectl get hpa,deploy,pod -n %s -w", namespace),
 	}
+}
+
+func envDefault(key, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 func (s *MemoryStore) removeAllocationsLocked(orderID string) {

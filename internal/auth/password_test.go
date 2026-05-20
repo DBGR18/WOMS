@@ -31,6 +31,9 @@ func TestVerifyPasswordSupportsLegacyDemoPasswords(t *testing.T) {
 	if VerifyPassword("demo", "wrong") {
 		t.Fatal("expected legacy demo password to reject wrong password")
 	}
+	if VerifyPassword("temporary", "temporary") {
+		t.Fatal("expected unknown plaintext password to be rejected")
+	}
 }
 
 func TestVerifyPasswordSupportsBoundedLegacySHA256Hashes(t *testing.T) {

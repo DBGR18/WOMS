@@ -47,6 +47,31 @@ func TestAcquireLineLockStopsOnNonContentionError(t *testing.T) {
 	}
 }
 
+func TestValidateLockConfigRejectsInvalidDurations(t *testing.T) {
+	validTTL := 15 * time.Second
+	validRenew := 5 * time.Second
+	validTimeout := 10 * time.Second
+	if err := validateLockConfig(validTTL, validRenew, validTimeout); err != nil {
+		t.Fatalf("expected valid lock config, got %v", err)
+	}
+	cases := []struct {
+		name    string
+		ttl     time.Duration
+		renew   time.Duration
+		timeout time.Duration
+	}{
+		{"zero ttl", 0, validRenew, validTimeout},
+		{"zero timeout", validTTL, validRenew, 0},
+		{"zero renew", validTTL, 0, validTimeout},
+		{"renew equals ttl", validTTL, validTTL, validTimeout},
+	}
+	for _, tc := range cases {
+		if err := validateLockConfig(tc.ttl, tc.renew, tc.timeout); err == nil {
+			t.Fatalf("%s: expected invalid lock config", tc.name)
+		}
+	}
+}
+
 type retryLockProvider struct {
 	failures int
 	attempts int

@@ -49,6 +49,9 @@ func main() {
 	var db *sql.DB
 	var lockProvider womslock.Provider
 	if databaseURL != "" {
+		if err := validateLockConfig(lockTTL, lockRenewInterval, lockTimeout); err != nil {
+			log.Fatalf("invalid Redis lock configuration: %v", err)
+		}
 		if redisAddr == "" {
 			log.Fatal("REDIS_ADDR is required when DATABASE_URL is set; scheduler-worker refuses to run without Redis line locks")
 		}
@@ -151,19 +154,36 @@ func processDBJob(ctx context.Context, db *sql.DB, lockProvider womslock.Provide
 		if err := markJobFailed(ctx, db, job.ID, "Redis 排程鎖未設定。"); err != nil {
 			return err
 		}
-		return errors.New("redis lock provider is required")
+		return nil
 	}
 	lockCtx, cancel := context.WithTimeout(ctx, lockTimeout)
 	defer cancel()
 	lineLock, err := acquireLineLock(lockCtx, lockProvider, scheduleLineLockKey(job.LineID), lockTTL)
 	if err != nil {
-		_ = markJobRetry(ctx, db, job.ID, "同產線排程鎖取得逾時，等待重試。")
+		if lockCtx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			_ = markJobRetry(ctx, db, job.ID, "同產線排程鎖取得逾時，等待重試。")
+		} else {
+			_ = markJobRetry(ctx, db, job.ID, "Redis 排程鎖取得失敗，等待重試："+err.Error())
+		}
 		return err
 	}
 	defer lineLock.Release(context.Background())
 	runCtx, stopRenewal := startLockRenewal(ctx, lineLock, lockTTL, lockRenewInterval)
 	defer stopRenewal()
 	return processDBJobLocked(runCtx, db, job, maxRetries)
+}
+
+func validateLockConfig(lockTTL, lockRenewInterval, lockTimeout time.Duration) error {
+	if lockTTL <= 0 {
+		return errors.New("WORKER_LOCK_TTL_MS must be greater than zero")
+	}
+	if lockTimeout <= 0 {
+		return errors.New("WORKER_LOCK_TIMEOUT_MS must be greater than zero")
+	}
+	if lockRenewInterval <= 0 || lockRenewInterval >= lockTTL {
+		return errors.New("WORKER_LOCK_RENEW_INTERVAL_MS must be greater than zero and less than WORKER_LOCK_TTL_MS")
+	}
+	return nil
 }
 
 func acquireLineLock(ctx context.Context, provider womslock.Provider, key string, ttl time.Duration) (womslock.Lock, error) {

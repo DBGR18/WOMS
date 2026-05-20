@@ -176,7 +176,7 @@ document.getElementById("delete-user-button").addEventListener("click", async ()
   }
   try {
     const user = await request(`/api/users/${encodeURIComponent(username)}`, { method: "DELETE" });
-    showMessage("帳號已處理", user.disabled ? `${user.username} 已停用` : `${username} 已刪除`);
+    showMessage("帳號已處理", user.deleted ? `${username} 已刪除` : `${user.username} 已停用`);
     await loadUsers();
   } catch (error) {
     showMessage("帳號刪除失敗", error.message, "warn");

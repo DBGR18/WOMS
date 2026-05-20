@@ -22,7 +22,8 @@ var ErrTokenSessionNotFound = errors.New("token session not found")
 type TokenSessionStore interface {
 	Save(ctx context.Context, token string, claims auth.Claims) error
 	Verify(ctx context.Context, token string, claims auth.Claims) error
-	Revoke(ctx context.Context, token string) error
+	Revoke(ctx context.Context, token string) (bool, error)
+	TracksSessions() bool
 	Close() error
 }
 
@@ -36,8 +37,12 @@ func (NoopTokenSessionStore) Verify(context.Context, string, auth.Claims) error 
 	return nil
 }
 
-func (NoopTokenSessionStore) Revoke(context.Context, string) error {
-	return nil
+func (NoopTokenSessionStore) Revoke(context.Context, string) (bool, error) {
+	return false, nil
+}
+
+func (NoopTokenSessionStore) TracksSessions() bool {
+	return false
 }
 
 func (NoopTokenSessionStore) Close() error {
@@ -79,11 +84,17 @@ func (s *MemoryTokenSessionStore) Verify(_ context.Context, token string, _ auth
 	return nil
 }
 
-func (s *MemoryTokenSessionStore) Revoke(_ context.Context, token string) error {
+func (s *MemoryTokenSessionStore) Revoke(_ context.Context, token string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.sessions, tokenSessionKey(token))
-	return nil
+	key := tokenSessionKey(token)
+	_, ok := s.sessions[key]
+	delete(s.sessions, key)
+	return ok, nil
+}
+
+func (s *MemoryTokenSessionStore) TracksSessions() bool {
+	return true
 }
 
 func (s *MemoryTokenSessionStore) Close() error {
@@ -143,9 +154,13 @@ func (s *RedisTokenSessionStore) Verify(ctx context.Context, token string, _ aut
 	return nil
 }
 
-func (s *RedisTokenSessionStore) Revoke(ctx context.Context, token string) error {
-	_, err := s.command(ctx, "DEL", tokenSessionKey(token))
-	return err
+func (s *RedisTokenSessionStore) Revoke(ctx context.Context, token string) (bool, error) {
+	value, err := s.command(ctx, "DEL", tokenSessionKey(token))
+	return value == "1", err
+}
+
+func (s *RedisTokenSessionStore) TracksSessions() bool {
+	return true
 }
 
 func (s *RedisTokenSessionStore) Close() error {

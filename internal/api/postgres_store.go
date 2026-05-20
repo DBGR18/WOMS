@@ -574,7 +574,8 @@ func (s *PostgresStore) DeleteUser(username, actorID string) (domain.User, error
 		if _, err := s.db.Exec("DELETE FROM users WHERE id = $1", user.ID); err != nil {
 			return domain.User{}, err
 		}
-		user.Disabled = true
+		user.Disabled = false
+		user.Deleted = true
 		return user, nil
 	}
 	err = s.db.QueryRow(`
@@ -585,6 +586,7 @@ func (s *PostgresStore) DeleteUser(username, actorID string) (domain.User, error
 	if err != nil {
 		return domain.User{}, err
 	}
+	user.Deleted = false
 	_, _ = s.db.Exec(`
 		INSERT INTO audit_logs (id, actor_id, action, resource, reason, created_at)
 		VALUES ($1, $2, 'user.disable', $3, '', NOW())
@@ -1060,6 +1062,13 @@ func (s *PostgresStore) ClearHPAPeakDemo(claims auth.Claims) (hpaPeakSummary, er
 	`, hpaDemoSource); err != nil {
 		return hpaPeakSummary{}, err
 	}
+	if _, err := tx.Exec(`
+		DELETE FROM schedule_jobs
+		WHERE (source = $1 OR line_id BETWEEN 'L001' AND 'L200')
+		  AND status NOT IN ('queued', 'running', 'cancelled')
+	`, hpaDemoSource); err != nil {
+		return hpaPeakSummary{}, err
+	}
 	if _, err := tx.Exec("DELETE FROM schedule_allocations WHERE line_id BETWEEN 'L001' AND 'L200'"); err != nil {
 		return hpaPeakSummary{}, err
 	}
@@ -1157,20 +1166,13 @@ func (s *PostgresStore) resetHPAPeakDemoDB(tx *sql.Tx) error {
 }
 
 func (s *PostgresStore) hpaPeakSummaryDB() (hpaPeakSummary, error) {
-	summary := hpaPeakSummary{
-		Statuses: map[string]int{
-			string(domain.JobQueued):    0,
-			string(domain.JobRunning):   0,
-			string(domain.JobCompleted): 0,
-			string(domain.JobFailed):    0,
-			string(domain.JobCancelled): 0,
-		},
-		Topic:          "woms.schedule.jobs",
-		ConsumerGroup:  "woms-scheduler-workers",
-		HPAName:        "woms-woms-worker-hpa",
-		DeploymentName: "woms-woms-worker",
-		Reason:         "幾百條產線同時進行月底排程，Kafka lag 上升時 KEDA 會擴充 scheduler-worker pods。",
-		WatchCommand:   "kubectl get hpa,deploy,pod -n woms -w",
+	summary := hpaPeakSummaryDefaults()
+	summary.Statuses = map[string]int{
+		string(domain.JobQueued):    0,
+		string(domain.JobRunning):   0,
+		string(domain.JobCompleted): 0,
+		string(domain.JobFailed):    0,
+		string(domain.JobCancelled): 0,
 	}
 	if err := s.db.QueryRow(`
 		SELECT COUNT(DISTINCT line_id)

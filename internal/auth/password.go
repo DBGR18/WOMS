@@ -47,7 +47,7 @@ func VerifyPassword(storedHash, password string) bool {
 	}
 	parts := strings.Split(storedHash, "$")
 	if len(parts) != 4 || parts[0] != "sha256" {
-		return subtle.ConstantTimeCompare([]byte(storedHash), []byte(password)) == 1
+		return storedHash == "demo" && subtle.ConstantTimeCompare([]byte(storedHash), []byte(password)) == 1
 	}
 	iterations, err := strconv.Atoi(parts[1])
 	if err != nil || iterations <= 0 || iterations > maxPasswordHashIterations {
