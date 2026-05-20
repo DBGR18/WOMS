@@ -335,6 +335,33 @@ func TestHPAPeakDemoIsAdminOnlyAndCreatesWorkload(t *testing.T) {
 	}
 }
 
+func TestHPAPeakDemoPublishFailureCancelsWorkload(t *testing.T) {
+	store := NewMemoryStore()
+	server := NewServerWithPublisher("secret", store, failingPublisher{})
+	admin := login(t, server, "admin", "demo")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/demo/hpa-peak", nil)
+	req.Header.Set("Authorization", "Bearer "+admin)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusBadGateway {
+		t.Fatalf("expected publish failure, got %d %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "排程尖峰任務送出失敗") {
+		t.Fatalf("expected zh-TW publish error, got %s", res.Body.String())
+	}
+	summary := store.HPAPeakSummary()
+	if summary.Statuses[string(domain.JobQueued)] != 0 {
+		t.Fatalf("publish failure should not leave queued jobs, got %+v", summary.Statuses)
+	}
+	if summary.Statuses[string(domain.JobCancelled)] != 400 {
+		t.Fatalf("expected failed demo workload to be cancelled, got %+v", summary.Statuses)
+	}
+	if summary.OrderCount != 0 || summary.LineCount != 0 {
+		t.Fatalf("expected failed demo workload orders and lines to be cleared, got %+v", summary)
+	}
+}
+
 func TestExecuteScheduleJobRespectsLineLockAndCancelledStatus(t *testing.T) {
 	store := NewMemoryStore()
 	server := NewServerWithPublisher("secret", store, &recordingPublisher{})

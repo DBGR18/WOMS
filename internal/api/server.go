@@ -592,7 +592,15 @@ func (s *Server) handleHPAPeakDemo(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		s.publishHPAPeakJobs(s.store.HPAPeakJobs())
+		publishCtx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+		err = s.publishHPAPeakJobs(publishCtx, s.store.HPAPeakJobs())
+		cancel()
+		if err != nil {
+			_, _ = s.store.ClearHPAPeakDemo(claims)
+			log.Printf("hpa peak schedule job publish failed: %v", err)
+			writeError(w, http.StatusBadGateway, "排程尖峰任務送出失敗，請稍後再試。")
+			return
+		}
 		writeJSON(w, http.StatusAccepted, hpaPeakResponse{Summary: summary})
 	case http.MethodDelete:
 		summary, err := s.store.ClearHPAPeakDemo(claims)
@@ -606,21 +614,16 @@ func (s *Server) handleHPAPeakDemo(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) publishHPAPeakJobs(jobs []domain.ScheduleJob) {
+func (s *Server) publishHPAPeakJobs(ctx context.Context, jobs []domain.ScheduleJob) error {
 	if len(jobs) == 0 {
-		return
+		return nil
 	}
-	go func() {
-		for _, job := range jobs {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			err := s.publisher.PublishScheduleJob(ctx, job)
-			cancel()
-			if err != nil {
-				log.Printf("hpa peak schedule job publish failed id=%s: %v", job.ID, err)
-				return
-			}
+	for _, job := range jobs {
+		if err := s.publisher.PublishScheduleJob(ctx, job); err != nil {
+			return fmt.Errorf("job %s: %w", job.ID, err)
 		}
-	}()
+	}
+	return nil
 }
 
 func (s *Server) handleScheduleCalendar(w http.ResponseWriter, r *http.Request) {
