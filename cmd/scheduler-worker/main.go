@@ -52,6 +52,9 @@ func main() {
 		if err := validateLockConfig(lockTTL, lockRenewInterval, lockTimeout); err != nil {
 			log.Fatalf("invalid Redis lock configuration: %v", err)
 		}
+		if backfillInterval <= 0 {
+			log.Fatal("WORKER_BACKFILL_INTERVAL_MS must be greater than zero when DATABASE_URL is set")
+		}
 		if redisAddr == "" {
 			log.Fatal("REDIS_ADDR is required when DATABASE_URL is set; scheduler-worker refuses to run without Redis line locks")
 		}

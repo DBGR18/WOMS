@@ -126,7 +126,7 @@ kubectl get scaledobject,hpa -n woms
 kubectl describe scaledobject -n woms
 ```
 
-用 admin 登入 web，按「建立多產線排程尖峰」。確認畫面顯示 200 條產線、1,000 張訂單與 200 個 queued jobs，並顯示 Kafka topic、consumer group、HPA 與 deployment 名稱。接著觀察：
+用 admin 登入 web，按「建立多產線排程尖峰」。確認畫面顯示 200 條產線、1,000 張訂單與 1,000 個 queued jobs，並顯示 Kafka topic、consumer group、HPA 與 deployment 名稱。接著觀察：
 
 ```bash
 kubectl get deploy -n woms -w

@@ -44,6 +44,8 @@ spec:
               value: {{ .Values.worker.env.lockRenewIntervalMs | quote }}
             - name: WORKER_LOCK_TIMEOUT_MS
               value: {{ .Values.worker.env.lockTimeoutMs | quote }}
+            - name: WORKER_BACKFILL_INTERVAL_MS
+              value: {{ .Values.worker.env.backfillIntervalMs | quote }}
             - name: WORKER_DEPENDENCY_RETRY_TIMEOUT_MS
               value: {{ .Values.worker.env.dependencyRetryTimeoutMs | quote }}
             - name: WORKER_DEPENDENCY_RETRY_INTERVAL_MS

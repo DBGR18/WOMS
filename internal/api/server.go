@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"sort"
@@ -31,6 +32,7 @@ const hpaDemoSource = "hpa-peak-demo"
 const hpaDemoFirstLine = 1
 const hpaDemoLastLine = 200
 const hpaDemoOrdersPerLine = 5
+const hpaDemoJobsPerLine = hpaDemoOrdersPerLine
 const unacceptableDueDateMessage = "無法被接受的交期"
 const defaultLineTimezone = "Asia/Taipei"
 const orderIDDigits = 7
@@ -39,6 +41,13 @@ const orderIDModulo int64 = 10000000
 var nowUTC = func() time.Time {
 	return time.Now().UTC()
 }
+
+var hpaAutoscalingCache = struct {
+	sync.Mutex
+	key     string
+	expires time.Time
+	state   *hpaAutoscalingState
+}{}
 
 type Server struct {
 	jwtSecret         string
@@ -2068,18 +2077,21 @@ func (s *MemoryStore) CreateHPAPeakDemo(claims auth.Claims) (hpaPeakSummary, err
 			orderIDs = append(orderIDs, id)
 		}
 
-		jobID := "HPA-JOB-" + lineID
-		s.jobs[jobID] = domain.ScheduleJob{
-			ID:        jobID,
-			LineID:    lineID,
-			Status:    domain.JobQueued,
-			Message:   "多產線排程尖峰任務已送入背景佇列。",
-			Source:    hpaDemoSource,
-			OrderIDs:  orderIDs,
-			CreatedAt: now,
-			UpdatedAt: now,
+		for jobIndex := 1; jobIndex <= hpaDemoJobsPerLine; jobIndex++ {
+			jobID := fmt.Sprintf("HPA-JOB-%s-%03d", lineID, jobIndex)
+			jobOrderIDs := []string{orderIDs[jobIndex-1]}
+			s.jobs[jobID] = domain.ScheduleJob{
+				ID:        jobID,
+				LineID:    lineID,
+				Status:    domain.JobQueued,
+				Message:   "多產線排程尖峰任務已送入背景佇列。",
+				Source:    hpaDemoSource,
+				OrderIDs:  jobOrderIDs,
+				CreatedAt: now,
+				UpdatedAt: now,
+			}
+			s.auditLocked(claims.Subject, "schedule.job.create", jobID, hpaDemoSource)
 		}
-		s.auditLocked(claims.Subject, "schedule.job.create", jobID, hpaDemoSource)
 	}
 	return s.hpaPeakSummaryLocked(), nil
 }
@@ -2226,7 +2238,7 @@ func hpaPeakSummaryDefaults() hpaPeakSummary {
 		ConsumerGroup:  envDefault("KAFKA_CONSUMER_GROUP", "woms-scheduler-workers"),
 		HPAName:        envDefault("HPA_DEMO_HPA_NAME", "woms-woms-worker-hpa"),
 		DeploymentName: envDefault("HPA_DEMO_DEPLOYMENT_NAME", "woms-woms-worker"),
-		Reason:         "幾百條產線同時進行月底排程，Kafka lag 上升時 KEDA 會擴充 scheduler-worker pods。",
+		Reason:         "幾百條產線同時進行月底排程，Kafka lag 上升時 KEDA 會擴充 scheduler-worker pods；jobs 完成後 HPA 可能因 cooldown 短暫維持高副本數。",
 		WatchCommand:   fmt.Sprintf("kubectl get hpa,deploy,pod -n %s -w", namespace),
 	}
 	summary.Autoscaling = loadHPAAutoscalingState(namespace, summary.HPAName, summary.DeploymentName)
@@ -2238,6 +2250,17 @@ func loadHPAAutoscalingState(namespace, hpaName, deploymentName string) *hpaAuto
 	if host == "" {
 		return nil
 	}
+	labelSelector := envDefault("HPA_DEMO_POD_LABEL_SELECTOR", "app.kubernetes.io/component=scheduler-worker")
+	cacheKey := strings.Join([]string{host, namespace, hpaName, deploymentName, labelSelector}, "\x00")
+	now := time.Now()
+	hpaAutoscalingCache.Lock()
+	if hpaAutoscalingCache.key == cacheKey && now.Before(hpaAutoscalingCache.expires) {
+		state := hpaAutoscalingCache.state
+		hpaAutoscalingCache.Unlock()
+		return state
+	}
+	hpaAutoscalingCache.Unlock()
+
 	port := envDefault("KUBERNETES_SERVICE_PORT", "443")
 	token, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token")
 	if err != nil {
@@ -2301,7 +2324,6 @@ func loadHPAAutoscalingState(namespace, hpaName, deploymentName string) *hpaAuto
 		state.AvailableReplicas = deployment.Status.AvailableReplicas
 	}
 
-	labelSelector := envDefault("HPA_DEMO_POD_LABEL_SELECTOR", "app.kubernetes.io/component=scheduler-worker")
 	var pods struct {
 		Items []struct {
 			Status struct {
@@ -2313,7 +2335,9 @@ func loadHPAAutoscalingState(namespace, hpaName, deploymentName string) *hpaAuto
 			} `json:"status"`
 		} `json:"items"`
 	}
-	podsPath := path.Join("/api/v1/namespaces", namespace, "pods") + "?labelSelector=" + queryEscape(labelSelector)
+	query := url.Values{}
+	query.Set("labelSelector", labelSelector)
+	podsPath := path.Join("/api/v1/namespaces", namespace, "pods") + "?" + query.Encode()
 	if err := kubernetesGetJSON(ctx, client, baseURL, string(token), podsPath, &pods); err != nil {
 		messages = append(messages, "Pod 狀態讀取失敗："+err.Error())
 	} else {
@@ -2333,6 +2357,11 @@ func loadHPAAutoscalingState(namespace, hpaName, deploymentName string) *hpaAuto
 	if len(messages) > 0 {
 		state.Error = strings.Join(messages, "；")
 	}
+	hpaAutoscalingCache.Lock()
+	hpaAutoscalingCache.key = cacheKey
+	hpaAutoscalingCache.expires = time.Now().Add(2 * time.Second)
+	hpaAutoscalingCache.state = state
+	hpaAutoscalingCache.Unlock()
 	return state
 }
 
@@ -2352,11 +2381,6 @@ func kubernetesGetJSON(ctx context.Context, client *http.Client, baseURL, token,
 		return fmt.Errorf("%s %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 	return json.NewDecoder(resp.Body).Decode(target)
-}
-
-func queryEscape(value string) string {
-	replacer := strings.NewReplacer("%", "%25", " ", "%20", ",", "%2C", "=", "%3D", "/", "%2F", ":", "%3A")
-	return replacer.Replace(value)
 }
 
 func envDefault(key, fallback string) string {

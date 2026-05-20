@@ -313,10 +313,10 @@ func TestHPAPeakDemoIsAdminOnlyAndCreatesWorkload(t *testing.T) {
 	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode hpa demo response: %v", err)
 	}
-	if payload.Summary.LineCount != 200 || payload.Summary.OrderCount != 1000 || payload.Summary.JobCount != 200 {
+	if payload.Summary.LineCount != 200 || payload.Summary.OrderCount != 1000 || payload.Summary.JobCount != 1000 {
 		t.Fatalf("unexpected hpa demo summary: %+v", payload.Summary)
 	}
-	if payload.Summary.Statuses[string(domain.JobQueued)] != 200 {
+	if payload.Summary.Statuses[string(domain.JobQueued)] != 1000 {
 		t.Fatalf("expected queued jobs, got %+v", payload.Summary.Statuses)
 	}
 
@@ -330,7 +330,7 @@ func TestHPAPeakDemoIsAdminOnlyAndCreatesWorkload(t *testing.T) {
 	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode clear response: %v", err)
 	}
-	if payload.Summary.LineCount != 0 || payload.Summary.OrderCount != 0 || payload.Summary.JobCount != 200 || payload.Summary.Statuses[string(domain.JobCancelled)] != 200 {
+	if payload.Summary.LineCount != 0 || payload.Summary.OrderCount != 0 || payload.Summary.JobCount != 1000 || payload.Summary.Statuses[string(domain.JobCancelled)] != 1000 {
 		t.Fatalf("expected cleared hpa demo summary, got %+v", payload.Summary)
 	}
 }

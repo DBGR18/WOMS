@@ -1024,19 +1024,21 @@ func (s *PostgresStore) CreateHPAPeakDemo(claims auth.Claims) (hpaPeakSummary, e
 			}
 		}
 
-		jobID := "HPA-JOB-" + lineID
-		orderJSON, _ := json.Marshal(orderIDs)
-		if _, err := tx.Exec(`
-			INSERT INTO schedule_jobs (id, line_id, status, message, source, order_ids, created_at, updated_at)
-			VALUES ($1, $2, 'queued', '多產線排程尖峰任務已送入背景佇列。', $3, $4::jsonb, $5, $5)
-		`, jobID, lineID, hpaDemoSource, string(orderJSON), now); err != nil {
-			return hpaPeakSummary{}, err
-		}
-		if _, err := tx.Exec(`
-			INSERT INTO audit_logs (id, actor_id, action, resource, reason, created_at)
-			VALUES ($1, $2, 'schedule.job.create', $3, $4, $5)
-		`, "AUD-HPA-"+lineID, claims.Subject, jobID, hpaDemoSource, now); err != nil {
-			return hpaPeakSummary{}, err
+		for jobIndex := 1; jobIndex <= hpaDemoJobsPerLine; jobIndex++ {
+			jobID := fmt.Sprintf("HPA-JOB-%s-%03d", lineID, jobIndex)
+			orderJSON, _ := json.Marshal([]string{orderIDs[jobIndex-1]})
+			if _, err := tx.Exec(`
+				INSERT INTO schedule_jobs (id, line_id, status, message, source, order_ids, created_at, updated_at)
+				VALUES ($1, $2, 'queued', '多產線排程尖峰任務已送入背景佇列。', $3, $4::jsonb, $5, $5)
+			`, jobID, lineID, hpaDemoSource, string(orderJSON), now); err != nil {
+				return hpaPeakSummary{}, err
+			}
+			if _, err := tx.Exec(`
+				INSERT INTO audit_logs (id, actor_id, action, resource, reason, created_at)
+				VALUES ($1, $2, 'schedule.job.create', $3, $4, $5)
+			`, fmt.Sprintf("AUD-HPA-%s-%03d", lineID, jobIndex), claims.Subject, jobID, hpaDemoSource, now); err != nil {
+				return hpaPeakSummary{}, err
+			}
 		}
 	}
 	if err := tx.Commit(); err != nil {

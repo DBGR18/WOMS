@@ -47,6 +47,7 @@ test("Helm values keep async scheduling and HPA demo defaults wired", () => {
   assert.match(values, /lockTtlMs:\s+"15000"/);
   assert.match(values, /lockRenewIntervalMs:\s+"5000"/);
   assert.match(values, /lockTimeoutMs:\s+"10000"/);
+  assert.match(values, /backfillIntervalMs:\s+"5000"/);
   assert.match(values, /consumerGroup:\s+woms-scheduler-workers/);
   assert.match(values, /bootstrapServers:\s+"kafka\.\{\{ \.Release\.Namespace \}\}\.svc\.cluster\.local:9092"/);
   assert.match(values, /lagThreshold:\s+"10"/);
@@ -245,6 +246,7 @@ test("API and worker deployments expose PostgreSQL, Kafka, and retry env", () =>
   assert.match(workerDeployment, /name:\s+WORKER_LOCK_TTL_MS/);
   assert.match(workerDeployment, /name:\s+WORKER_LOCK_RENEW_INTERVAL_MS/);
   assert.match(workerDeployment, /name:\s+WORKER_LOCK_TIMEOUT_MS/);
+  assert.match(workerDeployment, /name:\s+WORKER_BACKFILL_INTERVAL_MS/);
   assert.match(workerDeployment, /name:\s+WORKER_DEPENDENCY_RETRY_TIMEOUT_MS/);
   assert.match(workerDeployment, /name:\s+WORKER_DEPENDENCY_RETRY_INTERVAL_MS/);
   assert.match(workerDeployment, /if not \.Values\.keda\.enabled/);

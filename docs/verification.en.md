@@ -126,7 +126,7 @@ kubectl get scaledobject,hpa -n woms
 kubectl describe scaledobject -n woms
 ```
 
-Log in to the web UI as admin and click the multi-line scheduling peak creation button. Confirm that the panel shows 200 lines, 1,000 orders, 200 queued jobs, and the Kafka topic, consumer group, HPA, and deployment names. Then watch:
+Log in to the web UI as admin and click the multi-line scheduling peak creation button. Confirm that the panel shows 200 lines, 1,000 orders, 1,000 queued jobs, and the Kafka topic, consumer group, HPA, and deployment names. Then watch:
 
 ```bash
 kubectl get deploy -n woms -w
