@@ -314,7 +314,7 @@ ssh -L 8081:127.0.0.1:8081 ubuntu@192.168.56.101
 
 The HPA scenario for WOMS is the scheduler-worker backlog. During end-of-day planning or rush-order recovery, the API publishes many scheduling jobs to Kafka topic `woms.schedule.jobs`. The scheduler workers share consumer group `woms-scheduler-workers`; when lag exceeds `keda.kafka.lagThreshold`, KEDA creates and drives the HPA named `woms-woms-worker-hpa` for deployment `woms-woms-worker`. CPU utilization is kept as a secondary trigger for compute-heavy scheduling bursts.
 
-Log in to the web UI as admin, open the "multi-line scheduling peak" panel, and click the peak creation button. The API clears old `L001-L200` data, creates 200 demo lines, 1,000 pending orders, and 1,000 scheduling jobs, then publishes them to Kafka topic `woms.schedule.jobs`. The demo creates multiple jobs per line so Redis line locks are exercised while workers consume the backlog with consumer group `woms-scheduler-workers`; the chart creates the topic automatically with a partition count no smaller than `keda.maxReplicaCount`, so HPA-created worker pods can consume in parallel.
+Log in to the web UI as admin, open the "multi-line scheduling peak" panel, and click the peak creation button. The API clears old `L001-L200` data, creates 200 demo lines, 1,000 pending orders, and 400 scheduling jobs, then publishes them to Kafka topic `woms.schedule.jobs`. The demo creates multiple jobs per line so Redis line locks are exercised while workers consume the backlog with consumer group `woms-scheduler-workers`; the chart creates the topic automatically with a partition count no smaller than `keda.maxReplicaCount`, so HPA-created worker pods can consume in parallel.
 
 Watch KEDA create the HPA and scale the worker:
 

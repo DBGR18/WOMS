@@ -191,7 +191,7 @@ document.getElementById("create-hpa-peak").addEventListener("click", async () =>
     return;
   }
   try {
-    renderHPAPeakLoading("正在建立 200 條 demo 產線、1,000 張待排程訂單與 1,000 個排程任務...");
+    renderHPAPeakLoading("正在建立 200 條 demo 產線、1,000 張待排程訂單與 400 個排程任務...");
     const payload = await request("/api/demo/hpa-peak", { method: "POST" });
     state.hpaPeak = payload.summary;
     renderHPAPeakSummary();

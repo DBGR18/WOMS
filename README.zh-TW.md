@@ -317,7 +317,7 @@ ssh -L 8081:127.0.0.1:8081 ubuntu@192.168.56.101
 
 WOMS 的 HPA 情境是 scheduler-worker backlog。月底排程或急單復原時，API 會把大量排程任務送到 Kafka topic `woms.schedule.jobs`。scheduler workers 共用 consumer group `woms-scheduler-workers`；當 lag 超過 `keda.kafka.lagThreshold`，KEDA 會建立並驅動 deployment `woms-woms-worker` 的 HPA `woms-woms-worker-hpa`。CPU utilization 保留為第二 trigger，用來支援排程計算尖峰。
 
-用 admin 登入 web，開啟「多產線排程尖峰」面板並按「建立多產線排程尖峰」。API 會先清除 `L001-L200` 舊資料，再建立 200 條 demo 產線、1,000 張待排程訂單與 1,000 個排程任務，並 publish 到 Kafka topic `woms.schedule.jobs`。demo 會為每條產線建立多個 jobs，因此可以實際觸發 Redis line lock；worker 會用 consumer group `woms-scheduler-workers` 消化 backlog。chart 會自動建立 topic，partition 數預設不小於 `keda.maxReplicaCount`，讓 HPA 擴出的 worker pods 可以平行消費。
+用 admin 登入 web，開啟「多產線排程尖峰」面板並按「建立多產線排程尖峰」。API 會先清除 `L001-L200` 舊資料，再建立 200 條 demo 產線、1,000 張待排程訂單與 400 個排程任務，並 publish 到 Kafka topic `woms.schedule.jobs`。demo 會為每條產線建立多個 jobs，因此可以實際觸發 Redis line lock；worker 會用 consumer group `woms-scheduler-workers` 消化 backlog。chart 會自動建立 topic，partition 數預設不小於 `keda.maxReplicaCount`，讓 HPA 擴出的 worker pods 可以平行消費。
 
 觀察 KEDA 建立 HPA 並擴展 worker：
 

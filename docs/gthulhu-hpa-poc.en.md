@@ -47,7 +47,7 @@ The main correction from the earlier proposal is this:
 
 Add a Gthulhu-backed scheduling-pressure signal to the existing WOMS scheduler-worker autoscaling path without replacing the current Kafka lag and CPU triggers.
 
-The target NF-like component in WOMS is `scheduler-worker`: it is the asynchronous scheduling executor. The API accepts schedule requests and publishes jobs to Kafka; the worker consumes `woms.schedule.jobs`, locks each production line while scheduling, persists allocations to PostgreSQL, and records audit results. During the HPA demo, the API creates 200 lines, 1,000 pending orders, and 1,000 queued jobs, then workers drain the backlog through consumer group `woms-scheduler-workers`.
+The target NF-like component in WOMS is `scheduler-worker`: it is the asynchronous scheduling executor. The API accepts schedule requests and publishes jobs to Kafka; the worker consumes `woms.schedule.jobs`, locks each production line while scheduling, persists allocations to PostgreSQL, and records audit results. During the HPA demo, the API creates 200 lines, 1,000 pending orders, and 400 queued jobs, then workers drain the backlog through consumer group `woms-scheduler-workers`.
 
 The PoC should prove this loop:
 
