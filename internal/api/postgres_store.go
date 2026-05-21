@@ -1019,11 +1019,14 @@ func (s *PostgresStore) nextRemainderOrderIDTx(tx *sql.Tx, originalID string, in
 	var err error
 	candidate = nextRemainderOrderID(originalID, incrementExistingSuffix, func(id string) bool {
 		if err != nil {
-			return true
+			return false
 		}
 		var exists bool
 		err = tx.QueryRow("SELECT EXISTS (SELECT 1 FROM orders WHERE id = $1)", id).Scan(&exists)
-		return err != nil || exists
+		if err != nil {
+			return false
+		}
+		return exists
 	})
 	if err != nil {
 		return "", err
