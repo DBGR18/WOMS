@@ -58,6 +58,16 @@ test("front-end visible HPA status labels are zh-TW", () => {
   assert.equal(html.includes(">Sales Follow-up<"), false);
 });
 
+test("scheduler panel starts collapsed behind an explicit toggle", () => {
+  const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");
+  const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
+  const styles = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
+  assert.equal(app.includes("schedulerPanelOpen: false"), true);
+  assert.equal(app.includes("setSchedulerPanelOpen(true)"), true);
+  assert.equal(html.includes("scheduler-panel-toggle"), true);
+  assert.match(styles, /body\[data-role="scheduler"\]\[data-scheduler-panel-open="false"\] \.layout/);
+});
+
 test("web nginx proxy preserves API request paths", () => {
   const nginx = readFileSync(new URL("./nginx.conf.template", import.meta.url), "utf8");
   // const composeNginx = readFileSync(new URL("./nginx.compose.conf.template", import.meta.url), "utf8");

@@ -109,6 +109,10 @@ body:not([data-role="scheduler"]) .layout {
   grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
 }
 
+body[data-role="scheduler"][data-scheduler-panel-open="false"] .layout {
+  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -128,6 +132,18 @@ body:not([data-role="scheduler"]) .layout {
   display: flex;
   align-items: end;
   gap: 12px;
+}
+
+.calendar-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.calendar-controls .scheduler-panel-toggle {
+  white-space: nowrap;
 }
 
 .search-box {
@@ -228,6 +244,41 @@ body:not([data-role="scheduler"]) .layout {
 .inline-form {
   grid-template-columns: repeat(4, minmax(120px, 1fr));
   align-items: end;
+}
+
+.admin-panel,
+.admin-panel * {
+  min-width: 0;
+}
+
+.admin-panel .inline-form {
+  grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
+}
+
+.admin-panel .inline-form button {
+  width: 100%;
+}
+
+.admin-panel .button-row {
+  display: grid;
+  grid-template-columns: 1fr;
+}
+
+.admin-panel .button-row button {
+  width: 100%;
+  min-height: 44px;
+  white-space: normal;
+  line-height: 1.25;
+}
+
+.admin-panel .hpa-metadata div {
+  grid-template-columns: minmax(72px, max-content) minmax(0, 1fr);
+}
+
+.admin-panel .hpa-demo-summary,
+.admin-panel .hpa-reason,
+.admin-panel .hpa-loading {
+  overflow-wrap: anywhere;
 }
 
 h3 {
@@ -948,6 +999,10 @@ button.calendar-item:focus-visible {
   overflow: auto;
 }
 
+body[data-role="scheduler"][data-scheduler-panel-open="false"] .action-drawer {
+  display: none;
+}
+
 .drawer-note {
   margin: 8px 0 0;
   color: var(--muted);
@@ -1089,6 +1144,10 @@ button.calendar-item:focus-visible {
     grid-template-columns: 1fr;
   }
 
+  body[data-role="scheduler"][data-scheduler-panel-open="false"] .layout {
+    grid-template-columns: 1fr;
+  }
+
   body:not([data-role="scheduler"]) .layout {
     grid-template-columns: 1fr;
   }
@@ -1167,6 +1226,10 @@ button.calendar-item:focus-visible {
   body[data-mobile-view="actions"] .status-panel,
   body[data-mobile-view="actions"] #batch-bar {
     display: none;
+  }
+
+  body[data-mobile-view="actions"] .action-drawer {
+    display: block;
   }
 
   .order-card-list {

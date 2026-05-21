@@ -50,6 +50,7 @@ const state = {
   productionOrderId: "",
   scheduleHistory: [],
   rejectOrderIds: [],
+  schedulerPanelOpen: false,
   selectedOrderIds: new Set(),
   mobileView: "orders",
   selectedLine: localStorage.getItem("woms.selectedLine") || defaultLine(fallbackLines),
@@ -304,8 +305,15 @@ document.getElementById("confirm-reject-orders").addEventListener("click", async
 document.querySelectorAll("[data-mobile-view]").forEach((button) => {
   button.addEventListener("click", () => {
     state.mobileView = button.dataset.mobileView;
+    if (state.user?.role === "scheduler" && state.mobileView === "actions") {
+      setSchedulerPanelOpen(true);
+    }
     renderMobileView();
   });
+});
+
+document.getElementById("scheduler-panel-toggle")?.addEventListener("click", () => {
+  setSchedulerPanelOpen(!state.schedulerPanelOpen);
 });
 
 document.getElementById("create-conflict-demo").addEventListener("click", async () => {
@@ -525,6 +533,7 @@ async function refreshWorkspace() {
 function renderWorkspace() {
   syncLineInputs();
   renderMobileView();
+  renderSchedulerPanelState();
   renderFilters();
   renderStatusSidebar();
   renderOrders();
@@ -664,13 +673,16 @@ async function createPreview(requestData, kind) {
 function renderAuthState() {
   const loggedIn = Boolean(state.token && state.user);
   document.body.dataset.role = state.user?.role ?? "";
+  if (state.user?.role !== "scheduler") {
+    state.schedulerPanelOpen = false;
+  }
+  renderSchedulerPanelState();
   document.getElementById("login-page").hidden = loggedIn;
   document.getElementById("app-shell").hidden = !loggedIn;
   document.getElementById("monitor-link").hidden = state.user?.role !== "admin";
   document.getElementById("admin-panel").hidden = state.user?.role !== "admin";
   document.getElementById("order-form").hidden = state.user?.role !== "sales";
   document.getElementById("sales-rejected-panel").hidden = state.user?.role !== "sales";
-  document.getElementById("scheduler-panel").hidden = state.user?.role !== "scheduler";
   document.getElementById("batch-bar").hidden = state.user?.role !== "scheduler";
   document.querySelectorAll(".scheduler-only").forEach((node) => {
     node.hidden = state.user?.role !== "scheduler";
@@ -1706,6 +1718,30 @@ function renderMobileView() {
   document.querySelectorAll("[data-mobile-view]").forEach((button) => {
     button.classList.toggle("active", button.dataset.mobileView === state.mobileView);
   });
+  if (state.user?.role === "scheduler" && state.mobileView === "actions") {
+    setSchedulerPanelOpen(true);
+  }
+}
+
+function setSchedulerPanelOpen(open) {
+  state.schedulerPanelOpen = Boolean(open);
+  renderSchedulerPanelState();
+}
+
+function renderSchedulerPanelState() {
+  const panel = document.getElementById("scheduler-panel");
+  const toggle = document.getElementById("scheduler-panel-toggle");
+  const isScheduler = state.user?.role === "scheduler";
+  const isOpen = isScheduler && state.schedulerPanelOpen;
+  document.body.dataset.schedulerPanelOpen = isOpen ? "true" : "false";
+  if (panel) {
+    panel.hidden = !isOpen;
+  }
+  if (toggle) {
+    toggle.hidden = !isScheduler;
+    toggle.setAttribute("aria-expanded", String(isOpen));
+    toggle.textContent = isOpen ? "收合排程紀錄" : "展開排程紀錄";
+  }
 }
 
 function renderScheduleHistory() {
