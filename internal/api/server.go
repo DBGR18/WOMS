@@ -2785,6 +2785,26 @@ func orderIDFromTime(now time.Time) string {
 	return fmt.Sprintf("ORD-%0*d", orderIDDigits, now.UnixNano()%orderIDModulo)
 }
 
+func nextRemainderOrderID(originalID string, incrementExistingSuffix bool, exists func(string) bool) string {
+	base := originalID
+	next := 1
+	if incrementExistingSuffix {
+		if split := strings.LastIndex(originalID, "-"); split > len("ORD-") {
+			if suffix, err := strconv.Atoi(originalID[split+1:]); err == nil {
+				base = originalID[:split]
+				next = suffix + 1
+			}
+		}
+	}
+	for {
+		candidate := fmt.Sprintf("%s-%d", base, next)
+		if !exists(candidate) {
+			return candidate
+		}
+		next++
+	}
+}
+
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
