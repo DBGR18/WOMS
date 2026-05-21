@@ -337,6 +337,7 @@ document.getElementById("confirm-preview-order").addEventListener("click", async
     });
     focusCreatedOrder(order);
     closePreviewPage();
+    document.getElementById("order-form").reset();
     showMessage("已加入待排程", "新訂單已正式放入待排程訂單。");
     await refreshWorkspace();
   } catch (error) {
@@ -1330,7 +1331,7 @@ function renderConflictActions(conflicts, manualForce) {
       ${renderConflictSolutionPicker(conflicts)}
       <label>
         <span>調整開始日期</span>
-        <input id="conflict-start-date" type="date" value="${escapeHtml(startDate)}">
+        <input id="conflict-start-date" type="date" onclick="this.showPicker()" value="${escapeHtml(startDate)}">
       </label>
       <button data-preview-action="retry-start-date" type="button">用新開始日期重新試排</button>
       ${renderConflictDueDateEditors(conflicts)}
@@ -1423,7 +1424,7 @@ function renderWaterline(allocations) {
 }
 
 function renderCalendarItem(allocation) {
-  const actionable = !allocation.preview && (allocation.status === statuses[1] || allocation.status === statuses[2]);
+  const actionable = !allocation.preview && (allocation.status === statuses[1] || allocation.status === statuses[2]) && state.user?.role === "scheduler";
   const tag = actionable ? "button" : "div";
   const attrs = actionable
     ? `type="button" data-calendar-order-id="${escapeHtml(allocation.orderId)}" data-calendar-date="${dateOnly(allocation.date)}"`
@@ -1438,6 +1439,10 @@ function renderCalendarItem(allocation) {
 }
 
 function handleCalendarOrderClick(orderId, productionDate = "") {
+  if (state.user?.role !== "scheduler") {
+    showMessage("權限不足", "只有排程工程師可以進行生產回報。", "warn");
+    return;
+  }
   const order = state.orders.find((item) => item.id === orderId);
   if (!order) {
     showMessage("找不到訂單", `${orderId} 不在目前工作站訂單清單內。`, "warn");
@@ -1458,7 +1463,7 @@ function renderOrderAction(order) {
       <div class="drawer-actions">
         <label>
           <span>交期</span>
-          <input data-resubmit-field="dueDate" type="date" min="${tomorrowDateInputValue()}" value="${dateOnly(order.dueDate)}">
+          <input data-resubmit-field="dueDate" type="date" onclick="this.showPicker()" min="${tomorrowDateInputValue()}" value="${dateOnly(order.dueDate)}">
         </label>
         <label>
           <span>數量</span>
@@ -1568,7 +1573,7 @@ function renderConflictDueDateEditors(conflicts) {
     return `
           <label>
             <span>${escapeHtml(orderId)}</span>
-            <input data-conflict-due-date="${escapeHtml(orderId)}" type="date" min="${tomorrowDateInputValue()}" value="${dateOnly(order.dueDate)}">
+            <input data-conflict-due-date="${escapeHtml(orderId)}" type="date" onclick="this.showPicker()" min="${tomorrowDateInputValue()}" value="${dateOnly(order.dueDate)}">
           </label>
           <button data-preview-action="update-conflict-due-date" data-order-id="${escapeHtml(orderId)}" type="button">更新 ${escapeHtml(orderId)} 交期並重試</button>
         `;

@@ -158,13 +158,20 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	setSecurityHeaders(w, s.corsAllowedOrigin)
 	// Wrap the writer before auth gating so unauthorized API requests are
 	// included in HTTPRequestsTotal.
+	start := time.Now()
 	rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 	defer func() {
+		statusStr := strconv.Itoa(rec.status)
 		metrics.HTTPRequestsTotal.WithLabelValues(
 			r.Method,
 			r.URL.Path,
-			strconv.Itoa(rec.status),
+			statusStr,
 		).Inc()
+		metrics.HTTPRequestDuration.WithLabelValues(
+			r.Method,
+			r.URL.Path,
+			statusStr,
+		).Observe(time.Since(start).Seconds())
 	}()
 
 	if r.Method == http.MethodOptions {
@@ -299,21 +306,11 @@ func (s *Server) handleIngressAuth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	token, err := auth.BearerToken(r.Header.Get("Authorization"))
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
+	token, _ := auth.BearerToken(r.Header.Get("Authorization"))
+	if token != "" {
+		s.tokenSessions.Revoke(r.Context(), token)
 	}
-	if _, err := auth.VerifyToken(s.jwtSecret, token); err != nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-	revoked, err := s.tokenSessions.Revoke(r.Context(), token)
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "auth session store unavailable")
-		return
-	}
-	if revoked && s.tokenSessions.TracksSessions() {
+	if s.tokenSessions.TracksSessions() {
 		metrics.CurrentOnlineUserCount.Dec()
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

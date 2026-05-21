@@ -13,6 +13,8 @@ import (
 
 	"github.com/d11nn/woms/internal/auth"
 	"github.com/d11nn/woms/internal/domain"
+	"github.com/d11nn/woms/internal/metrics"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func init() {
@@ -148,7 +150,14 @@ func TestLogoutRevokesTokenSession(t *testing.T) {
 	server := NewServerWithPublisherAndConfig("secret", NewMemoryStore(), NoopScheduleJobPublisher{}, ServerConfig{
 		TokenSessions: sessions,
 	})
+
+	initialUsers := testutil.ToFloat64(metrics.CurrentOnlineUserCount)
 	token := login(t, server, "sales", "demo")
+
+	afterLoginUsers := testutil.ToFloat64(metrics.CurrentOnlineUserCount)
+	if afterLoginUsers != initialUsers+1 {
+		t.Fatalf("expected CurrentOnlineUserCount to increment; got %f, initial %f", afterLoginUsers, initialUsers)
+	}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -156,6 +165,11 @@ func TestLogoutRevokesTokenSession(t *testing.T) {
 	server.ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
 		t.Fatalf("expected logout 200, got %d body=%s", res.Code, res.Body.String())
+	}
+
+	afterLogoutUsers := testutil.ToFloat64(metrics.CurrentOnlineUserCount)
+	if afterLogoutUsers != initialUsers {
+		t.Fatalf("expected CurrentOnlineUserCount to decrement back to %f; got %f", initialUsers, afterLogoutUsers)
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/internal/auth/verify", nil)

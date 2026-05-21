@@ -46,6 +46,17 @@ var (
 		},
 		[]string{"method", "path", "status"},
 	)
+
+	// HTTPRequestDuration tracks the latency of HTTP requests.
+	HTTPRequestDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "woms",
+			Name:      "http_request_duration_seconds",
+			Help:      "Duration of HTTP requests in seconds.",
+			Buckets:   prometheus.DefBuckets,
+		},
+		[]string{"method", "path", "status"},
+	)
 )
 
 // Register registers the application-level metrics once. It is safe to
@@ -54,6 +65,7 @@ func Register() {
 	registerOnce.Do(func() {
 		Registry.MustRegister(CurrentOnlineUserCount)
 		Registry.MustRegister(HTTPRequestsTotal)
+		Registry.MustRegister(HTTPRequestDuration)
 	})
 }
 

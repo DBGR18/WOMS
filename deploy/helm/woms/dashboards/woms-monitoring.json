@@ -15,7 +15,7 @@
       }
     ]
   },
-  "description": "WOMS — Wafer Order Management System · Live API & Runtime Metrics",
+  "description": "WOMS \u2014 Wafer Order Management System \u00b7 Live API & Runtime Metrics",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -46,7 +46,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "none",
+          "unit": "short",
           "color": {
             "mode": "thresholds"
           },
@@ -98,7 +98,7 @@
     {
       "id": 2,
       "title": "HTTP Request Rate (5 m)",
-      "description": "Requests per second averaged over the last 5 minutes, by method · path · status",
+      "description": "Requests per second averaged over the last 5 minutes, by method \u00b7 path \u00b7 status",
       "type": "timeseries",
       "gridPos": {
         "h": 5,
@@ -113,13 +113,13 @@
       "targets": [
         {
           "expr": "sum by (method, path, status) (rate(woms_http_requests_total[5m]))",
-          "legendFormat": "{{method}} {{path}} · {{status}}",
+          "legendFormat": "{{method}} {{path}} \u00b7 {{status}}",
           "refId": "A"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "reqps",
+          "unit": "short",
           "color": {
             "mode": "palette-classic"
           },
@@ -152,7 +152,7 @@
     },
     {
       "id": 3,
-      "title": "HTTP Req/s — Total (1 m)",
+      "title": "HTTP Req/s \u2014 Total (1 m)",
       "description": "Aggregate requests/second across all routes",
       "type": "stat",
       "gridPos": {
@@ -174,7 +174,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "reqps",
+          "unit": "short",
           "color": {
             "mode": "thresholds"
           },
@@ -320,7 +320,7 @@
     },
     {
       "id": 6,
-      "title": "Online Users — Trend",
+      "title": "Online Users \u2014 Trend",
       "description": "Historical trend of concurrent online users",
       "type": "timeseries",
       "gridPos": {
@@ -342,7 +342,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "none",
+          "unit": "short",
           "color": {
             "fixedColor": "#5794F2",
             "mode": "fixed"
@@ -372,7 +372,7 @@
     },
     {
       "id": 7,
-      "title": "Go Runtime — Goroutines",
+      "title": "Go Runtime \u2014 Goroutines",
       "description": "Number of goroutines currently running in the WOMS API process",
       "type": "timeseries",
       "gridPos": {
@@ -426,7 +426,7 @@
     },
     {
       "id": 8,
-      "title": "Go Runtime — Heap Alloc",
+      "title": "Go Runtime \u2014 Heap Alloc",
       "description": "Bytes of allocated heap objects (live)",
       "type": "timeseries",
       "gridPos": {
@@ -448,7 +448,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "bytes",
+          "unit": "short",
           "color": {
             "fixedColor": "#F2CC0C",
             "mode": "fixed"
@@ -502,7 +502,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "ops",
+          "unit": "short",
           "color": {
             "mode": "palette-classic"
           },
@@ -555,7 +555,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "s",
+          "unit": "short",
           "color": {
             "mode": "palette-classic"
           },
@@ -636,6 +636,81 @@
           "mode": "multi",
           "sort": "desc"
         }
+      }
+    },
+    {
+      "id": 904,
+      "title": "Request Latency (P99)",
+      "type": "gauge",
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(woms_http_request_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "P99",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 8
+      }
+    },
+    {
+      "id": 905,
+      "title": "Error Rate",
+      "type": "stat",
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(woms_http_requests_total{status=~\"[45].*\"}[5m])) / sum(rate(woms_http_requests_total[5m]))",
+          "legendFormat": "Error Rate",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 8
+      }
+    },
+    {
+      "id": 906,
+      "title": "System Health (CPU)",
+      "type": "timeseries",
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "expr": "rate(process_cpu_seconds_total[5m])",
+          "legendFormat": "CPU Usage",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 8
       }
     }
   ],
