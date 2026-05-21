@@ -1385,7 +1385,9 @@ func (s *MemoryStore) PreviewSchedule(req scheduleRequest, claims auth.Claims) (
 	if err != nil {
 		return schedulePreviewResponse{}, err
 	}
-	result.Allocations, _ = s.splitAllocationOrderIDsLocked(result.Allocations)
+	if req.DraftOrder == nil {
+		result.Allocations, _ = s.splitAllocationOrderIDsLocked(result.Allocations)
+	}
 	lineID := scheduleLineID(req, claims)
 	id := "PREVIEW-" + strconv.Itoa(s.nextPreviewID)
 	s.nextPreviewID++

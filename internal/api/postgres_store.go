@@ -1391,9 +1391,11 @@ func (s *PostgresStore) previewFromDB(req scheduleRequest, claims auth.Claims) (
 	if err != nil {
 		return scheduler.Result{}, previewFromDBResult{}, err
 	}
-	result.Allocations, err = s.splitAllocationOrderIDsDB(result.Allocations)
-	if err != nil {
-		return scheduler.Result{}, previewFromDBResult{}, err
+	if req.DraftOrder == nil {
+		result.Allocations, err = s.splitAllocationOrderIDsDB(result.Allocations)
+		if err != nil {
+			return scheduler.Result{}, previewFromDBResult{}, err
+		}
 	}
 	normalized := normalizedPreviewRequest(req)
 	now := time.Now().UTC()

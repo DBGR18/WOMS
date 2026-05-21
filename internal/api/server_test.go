@@ -1095,6 +1095,40 @@ func TestSalesConfirmsDraftPreviewIntoPendingOrder(t *testing.T) {
 	}
 }
 
+func TestSalesCanConfirmDraftPreviewWhenExistingOrdersFillStartDate(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	salesToken := login(t, server, "sales", "demo")
+	for range 4 {
+		createOrderWithPriorityAndDue(t, server, salesToken, "A", "low", "2026-05-22")
+	}
+	schedulerA := login(t, server, "scheduler-a", "demo")
+	createScheduleJob(t, server, schedulerA, "A")
+
+	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-22","currentDate":"2026-05-21","draftOrder":{"customer":"New Draft","lineId":"A","quantity":500,"priority":"low","dueDate":"2026-05-22"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
+	req.Header.Set("Authorization", "Bearer "+salesToken)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("preview failed: %d %s", res.Code, res.Body.String())
+	}
+	var preview struct {
+		PreviewID string `json:"previewId"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &preview); err != nil {
+		t.Fatalf("decode preview response: %v", err)
+	}
+
+	body = bytes.NewBufferString(`{"previewId":"` + preview.PreviewID + `"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/orders/preview-confirm", body)
+	req.Header.Set("Authorization", "Bearer "+salesToken)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("confirm preview failed: %d %s", res.Code, res.Body.String())
+	}
+}
+
 func TestSalesDraftPreviewRejectsTodayDueDate(t *testing.T) {
 	server := NewServer("secret", NewMemoryStore())
 	salesToken := login(t, server, "sales", "demo")
