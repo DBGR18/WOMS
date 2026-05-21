@@ -180,7 +180,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(r.URL.Path, "/api/") && !isPublicAPIPath(r) {
 		claims, err := s.claimsFromRequest(r)
 		if err != nil {
-			writeError(rec, http.StatusUnauthorized, "unauthorized")
+			writeClaimsError(rec, err)
 			return
 		}
 		r = r.WithContext(context.WithValue(r.Context(), claimsContextKey{}, claims))
@@ -287,7 +287,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleIngressAuth(w http.ResponseWriter, r *http.Request) {
 	claims, err := s.claimsFromRequest(r)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
+		writeClaimsError(w, err)
 		return
 	}
 	w.Header().Set("X-User-ID", claims.Subject)
@@ -753,6 +753,14 @@ func (s *Server) claimsFromRequest(r *http.Request) (auth.Claims, error) {
 		return auth.Claims{}, err
 	}
 	return claims, nil
+}
+
+func writeClaimsError(w http.ResponseWriter, err error) {
+	if errors.Is(err, auth.ErrInvalidToken) || errors.Is(err, auth.ErrExpiredToken) || errors.Is(err, ErrTokenSessionNotFound) {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "auth session store unavailable")
 }
 
 func isPublicAPIPath(r *http.Request) bool {
@@ -1330,6 +1338,13 @@ func (s *MemoryStore) DeleteUser(username, actorID string) (domain.User, error) 
 			s.auditLocked(actorID, "user.disable", user.ID, "")
 			return user, nil
 		}
+	}
+	if actorID == user.ID {
+		user.Disabled = true
+		user.Deleted = false
+		s.users[username] = user
+		s.auditLocked(actorID, "user.disable", user.ID, "")
+		return user, nil
 	}
 	delete(s.users, username)
 	s.auditLocked(actorID, "user.delete", user.ID, "")

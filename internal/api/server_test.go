@@ -167,6 +167,24 @@ func TestLogoutRevokesTokenSession(t *testing.T) {
 	}
 }
 
+func TestSessionStoreFailureReturnsServiceUnavailable(t *testing.T) {
+	server := NewServerWithPublisherAndConfig("secret", NewMemoryStore(), NoopScheduleJobPublisher{}, ServerConfig{
+		TokenSessions: failingVerifyTokenSessionStore{},
+	})
+	token := login(t, server, "sales", "demo")
+	req := httptest.NewRequest(http.MethodGet, "/api/orders", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected session store failure to return 503, got %d body=%s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "登入狀態服務暫時無法使用") {
+		t.Fatalf("expected session store unavailable response, got %s", res.Body.String())
+	}
+}
+
 func TestSalesCannotCreateScheduleJob(t *testing.T) {
 	server := NewServer("secret", NewMemoryStore())
 	token := login(t, server, "sales", "demo")
@@ -586,6 +604,32 @@ func TestAdminDeleteUnreferencedUserReportsDeleted(t *testing.T) {
 	}
 	if !strings.Contains(res.Body.String(), `"deleted":true`) || strings.Contains(res.Body.String(), `"disabled":true`) {
 		t.Fatalf("expected unreferenced user to be deleted, got %s", res.Body.String())
+	}
+}
+
+func TestAdminSelfDeleteDisablesAccount(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	admin := login(t, server, "admin", "demo")
+
+	body := bytes.NewBufferString(`{"username":"temporary-admin","password":"temporary","role":"admin"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/users", body)
+	req.Header.Set("Authorization", "Bearer "+admin)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("expected create admin 201, got %d %s", res.Code, res.Body.String())
+	}
+
+	self := login(t, server, "temporary-admin", "temporary")
+	req = httptest.NewRequest(http.MethodDelete, "/api/users/temporary-admin", nil)
+	req.Header.Set("Authorization", "Bearer "+self)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected self delete 200, got %d %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), `"disabled":true`) || strings.Contains(res.Body.String(), `"deleted":true`) {
+		t.Fatalf("expected self delete to disable account, got %s", res.Body.String())
 	}
 }
 
@@ -1781,4 +1825,12 @@ func (failingPublisher) PublishScheduleJob(context.Context, domain.ScheduleJob) 
 
 func (failingPublisher) Close() error {
 	return nil
+}
+
+type failingVerifyTokenSessionStore struct {
+	NoopTokenSessionStore
+}
+
+func (failingVerifyTokenSessionStore) Verify(context.Context, string, auth.Claims) error {
+	return errors.New("redis unavailable")
 }
