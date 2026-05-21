@@ -8,6 +8,7 @@ import {
   dateKeyInTimeZone,
   escapeHtml,
   exactFilterOrders,
+  filtersForCreatedOrder,
   groupAllocationsByDate,
   isFutureDateKey,
   lineScopedOrders,
@@ -143,6 +144,14 @@ test("exactFilterOrders treats status as single-select", () => {
     priorities: new Set(),
   });
   assert.deepEqual(result.map((item) => item.id), ["ORD-0000002"]);
+});
+
+test("filtersForCreatedOrder clears filters and focuses the created order status", () => {
+  const filters = filtersForCreatedOrder({ status: "待排程" });
+
+  assert.equal(filters.status, "待排程");
+  assert.deepEqual(Array.from(filters.customers), []);
+  assert.deepEqual(Array.from(filters.priorities), []);
 });
 
 test("customerFilterValues follows the active exact filters except customer", () => {

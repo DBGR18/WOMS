@@ -14,6 +14,14 @@ export function exactFilterOrders(orders, filters) {
   });
 }
 
+export function filtersForCreatedOrder(order, fallbackStatus = "待排程") {
+  return {
+    customers: new Set(),
+    status: order?.status || fallbackStatus,
+    priorities: new Set(),
+  };
+}
+
 export function customerFilterValues(orders, filters) {
   const candidateFilters = {
     ...filters,

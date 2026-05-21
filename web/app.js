@@ -6,6 +6,7 @@ import {
   defaultTimezone,
   escapeHtml,
   exactFilterOrders,
+  filtersForCreatedOrder,
   groupAllocationsByDate,
   lineScopedOrders,
   mergePreviewCalendarAllocations,
@@ -278,10 +279,11 @@ document.getElementById("confirm-preview-order").addEventListener("click", async
     return;
   }
   try {
-    await request("/api/orders/preview-confirm", {
+    const order = await request("/api/orders/preview-confirm", {
       method: "POST",
       body: JSON.stringify({ previewId: state.preview.previewId }),
     });
+    focusCreatedOrder(order);
     closePreviewPage();
     showMessage("已加入待排程", "新訂單已正式放入待排程訂單。");
     await refreshWorkspace();
@@ -1774,6 +1776,15 @@ function clearSession() {
   state.selectedOrderIds.clear();
   localStorage.removeItem("woms.token");
   localStorage.removeItem("woms.user");
+}
+
+function focusCreatedOrder(order) {
+  if (order?.lineId) {
+    state.selectedLine = order.lineId;
+    localStorage.setItem("woms.selectedLine", state.selectedLine);
+  }
+  state.filters = filtersForCreatedOrder(order);
+  state.selectedOrderIds.clear();
 }
 
 function showMessage(title, body, type = "info", details = "") {

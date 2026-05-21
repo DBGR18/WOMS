@@ -50,14 +50,22 @@ spec:
               value: {{ .Values.api.env.dependencyRetryTimeoutMs | quote }}
             - name: API_DEPENDENCY_RETRY_INTERVAL_MS
               value: {{ .Values.api.env.dependencyRetryIntervalMs | quote }}
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 36
           readinessProbe:
             httpGet:
               path: /readyz
               port: http
+            periodSeconds: 5
           livenessProbe:
             httpGet:
               path: /healthz
               port: http
+            periodSeconds: 10
           resources:
             {{- toYaml .Values.api.resources | nindent 12 }}
           securityContext:

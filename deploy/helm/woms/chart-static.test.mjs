@@ -218,6 +218,7 @@ test("API and worker deployments expose PostgreSQL, Kafka, and retry env", () =>
   assert.match(apiDeployment, /name:\s+KAFKA_PUBLISH_ENABLED/);
   assert.match(apiDeployment, /name:\s+API_DEPENDENCY_RETRY_TIMEOUT_MS/);
   assert.match(apiDeployment, /name:\s+API_DEPENDENCY_RETRY_INTERVAL_MS/);
+  assert.match(apiDeployment, /startupProbe:[\s\S]*path:\s+\/healthz[\s\S]*failureThreshold:\s+36/);
   assert.match(workerDeployment, /name:\s+KAFKA_SCHEDULE_TOPIC/);
   assert.match(workerDeployment, /value:\s+\{\{ tpl \.Values\.keda\.kafka\.bootstrapServers \. \| quote \}\}/);
   assert.match(workerDeployment, /name:\s+KAFKA_CONSUMER_GROUP/);
