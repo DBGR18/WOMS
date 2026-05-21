@@ -280,7 +280,7 @@ monitoring:
         interval: 15s
       # Gthulhu pods: scrape /metrics on port 9091
       gthulhu:
-        enabled: true
+        enabled: false
         path: /metrics
         service: '{{ .Release.Name }}-gthulhu-scheduler-sidecar'
         port: "9090"
@@ -291,7 +291,7 @@ monitoring:
     enabled: true
     image:
       repository: grafana/grafana
-      tag: "11.1.0"
+      tag: "10.4.7"
     env:
       anonymousEnabled: "true"
       anonymousOrgRole: Viewer

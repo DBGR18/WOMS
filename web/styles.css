@@ -396,6 +396,11 @@ textarea {
   color: var(--ink);
 }
 
+input[type="date"] {
+  min-height: 48px;
+  padding: 8px 12px;
+}
+
 button {
   border: 0;
   padding: 0 14px;
@@ -480,6 +485,9 @@ button:hover {
   color: var(--muted);
   font-size: 12px;
   font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .order-card-meta {
@@ -831,6 +839,14 @@ button.calendar-item:focus-visible {
   background: #fff0ef;
 }
 
+.calendar-item strong,
+.calendar-item span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .preview-item-inline {
   border: 1px dashed #f79009;
 }
@@ -1045,7 +1061,7 @@ button.calendar-item:focus-visible {
   }
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1040px) {
   .preview-dialog {
     width: min(100vw - 24px, 760px);
     max-height: calc(100vh - 24px);
@@ -1066,7 +1082,7 @@ button.calendar-item:focus-visible {
   }
 }
 
-@media (max-width: 980px) {
+@media (max-width: 1024px) {
 
   .app-header,
   .layout {

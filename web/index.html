@@ -192,7 +192,7 @@
           </label>
           <label>
             <span>交期</span>
-            <input name="dueDate" type="date">
+            <input name="dueDate" type="date" onclick="this.showPicker()">
           </label>
           <label class="wide-field">
             <span>備註（選填，120 字內）</span>
@@ -255,7 +255,7 @@
         </div>
         <form id="schedule-form" class="stack-form" hidden>
           <input name="lineId" type="hidden">
-          <input name="startDate" type="date">
+          <input name="startDate" type="date" onclick="this.showPicker()">
           <input name="reason">
         </form>
         <div class="preview-panel history-panel">
