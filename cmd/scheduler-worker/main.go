@@ -172,7 +172,11 @@ func processDBJob(ctx context.Context, db *sql.DB, lockProvider womslock.Provide
 		}
 		return nil
 	}
-	defer lineLock.Release(context.Background())
+	defer func() {
+		if err := lineLock.Release(context.Background()); err != nil {
+			log.Printf("failed to release line lock for job %s on line %s: %v", job.ID, job.LineID, err)
+		}
+	}()
 	runCtx, stopRenewal := startLockRenewal(ctx, lineLock, lockTTL, lockRenewInterval)
 	defer stopRenewal()
 	return processDBJobLocked(runCtx, db, job, maxRetries)
