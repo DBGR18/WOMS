@@ -114,6 +114,7 @@ test("statusClass maps WOMS statuses to stable CSS classes", () => {
   assert.equal(statusClass("生產中"), "status-running");
   assert.equal(statusClass("已完成"), "status-completed");
   assert.equal(statusClass("需業務處理"), "status-rejected");
+  assert.equal(statusClass("已取消"), "status-cancelled");
   assert.equal(statusClass("unknown"), "");
 });
 
@@ -196,6 +197,7 @@ test("uniqueValues and statusCounts provide sidebar/filter data", () => {
     "生產中": 0,
     "已完成": 1,
     "需業務處理": 0,
+    "已取消": 0,
   });
 });
 
@@ -217,6 +219,7 @@ test("lineScopedOrders limits status counts and tables to the selected line", ()
     "生產中": 0,
     "已完成": 1,
     "需業務處理": 0,
+    "已取消": 0,
   });
 });
 

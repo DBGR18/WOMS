@@ -25,6 +25,7 @@ const (
 	StatusInProgress OrderStatus = "生產中"
 	StatusCompleted  OrderStatus = "已完成"
 	StatusRejected   OrderStatus = "需業務處理"
+	StatusCancelled  OrderStatus = "已取消"
 )
 
 type User struct {

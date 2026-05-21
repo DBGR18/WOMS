@@ -128,7 +128,7 @@ type Store interface {
 	ListOrders(claims auth.Claims) []domain.Order
 	ListLines() []domain.ProductionLine
 	CreateOrder(req createOrderRequest, actorID string) (domain.Order, error)
-	DeleteOrders(req deleteOrdersRequest, claims auth.Claims) (deleteOrdersResponse, error)
+	CancelOrders(req cancelOrdersRequest, claims auth.Claims) (cancelOrdersResponse, error)
 	UpdateOrderDueDate(id string, req updateOrderRequest, claims auth.Claims) (domain.Order, error)
 	ConfirmPreviewOrder(previewID string, claims auth.Claims) (domain.Order, error)
 	RejectOrders(req rejectOrdersRequest, claims auth.Claims) (rejectOrdersResponse, error)
@@ -346,12 +346,12 @@ func (s *Server) handleOrders(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusCreated, order)
 	case http.MethodDelete:
-		var req deleteOrdersRequest
+		var req cancelOrdersRequest
 		if err := readJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		result, err := s.store.DeleteOrders(req, claims)
+		result, err := s.store.CancelOrders(req, claims)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
@@ -832,13 +832,13 @@ type createOrderRequest struct {
 	Note     string          `json:"note"`
 }
 
-type deleteOrdersRequest struct {
+type cancelOrdersRequest struct {
 	OrderIDs []string `json:"orderIds"`
 }
 
-type deleteOrdersResponse struct {
-	DeletedOrderIDs []string `json:"deletedOrderIds"`
-	SkippedOrderIDs []string `json:"skippedOrderIds,omitempty"`
+type cancelOrdersResponse struct {
+	CancelledOrderIDs []string `json:"cancelledOrderIds"`
+	SkippedOrderIDs   []string `json:"skippedOrderIds,omitempty"`
 }
 
 type updateOrderRequest struct {
@@ -1149,9 +1149,6 @@ func (s *MemoryStore) ListOrders(claims auth.Claims) []domain.Order {
 		if claims.Role == domain.RoleScheduler && order.LineID != claims.LineID {
 			continue
 		}
-		if claims.Role == domain.RoleScheduler && order.Status == domain.StatusRejected {
-			continue
-		}
 		orders = append(orders, order)
 	}
 	sort.Slice(orders, func(i, j int) bool {
@@ -1160,37 +1157,49 @@ func (s *MemoryStore) ListOrders(claims auth.Claims) []domain.Order {
 	return orders
 }
 
-func (s *MemoryStore) DeleteOrders(req deleteOrdersRequest, claims auth.Claims) (deleteOrdersResponse, error) {
+func (s *MemoryStore) CancelOrders(req cancelOrdersRequest, claims auth.Claims) (cancelOrdersResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if len(req.OrderIDs) == 0 {
-		return deleteOrdersResponse{}, errors.New("orderIds is required")
+		return cancelOrdersResponse{}, errors.New("orderIds is required")
 	}
-	result := deleteOrdersResponse{}
+	result := cancelOrdersResponse{}
+	now := nowUTC()
 	for _, id := range req.OrderIDs {
 		order, ok := s.orders[id]
 		if !ok {
 			result.SkippedOrderIDs = append(result.SkippedOrderIDs, id)
 			continue
 		}
-		if claims.Role == domain.RoleSales && order.CreatedBy != claims.Subject {
-			return deleteOrdersResponse{}, errors.New("sales can delete only their own orders")
+		if order.Status == domain.StatusCancelled {
+			result.SkippedOrderIDs = append(result.SkippedOrderIDs, id)
+			continue
+		}
+		if claims.Role == domain.RoleSales {
+			if order.CreatedBy != claims.Subject {
+				return cancelOrdersResponse{}, errors.New("sales can cancel only their own orders")
+			}
+			if order.Status != domain.StatusRejected {
+				return cancelOrdersResponse{}, errors.New("sales can cancel only rejected orders")
+			}
 		}
 		if claims.Role == domain.RoleScheduler && order.LineID != claims.LineID {
-			return deleteOrdersResponse{}, errors.New("cannot delete another production line")
+			return cancelOrdersResponse{}, errors.New("cannot cancel another production line")
 		}
 		if claims.Role != domain.RoleAdmin && claims.Role != domain.RoleSales && claims.Role != domain.RoleScheduler {
-			return deleteOrdersResponse{}, errors.New("role cannot delete orders")
+			return cancelOrdersResponse{}, errors.New("role cannot cancel orders")
 		}
 		if order.Status == domain.StatusInProgress || order.Status == domain.StatusCompleted {
-			return deleteOrdersResponse{}, errors.New("cannot delete in-progress or completed orders")
+			return cancelOrdersResponse{}, errors.New("cannot cancel in-progress or completed orders")
 		}
-		delete(s.orders, id)
+		order.Status = domain.StatusCancelled
+		order.UpdatedAt = now
+		s.orders[order.ID] = order
 		s.removeAllocationsLocked(id)
 		s.bumpLineRevisionLocked(order.LineID)
-		s.auditLocked(claims.Subject, "order.delete", id, "")
-		result.DeletedOrderIDs = append(result.DeletedOrderIDs, id)
+		s.auditLocked(claims.Subject, "order.cancel", id, "")
+		result.CancelledOrderIDs = append(result.CancelledOrderIDs, id)
 	}
 	return result, nil
 }
@@ -1687,6 +1696,7 @@ func isSchedulerWorkflowAudit(action string) bool {
 	case "schedule.job.create",
 		"schedule.job.manual_force",
 		"order.reject",
+		"order.cancel",
 		"production.start",
 		"production.confirm.complete",
 		"production.confirm.partial":
@@ -2835,10 +2845,11 @@ func zhUserMessage(message string) string {
 		"only pending orders can be rejected":                                  "只有待排程訂單可以被駁回。",
 		"sales can resubmit only their own orders":                             "只能重新送出自己的訂單。",
 		"only rejected orders can be resubmitted":                              "只有需業務處理的訂單可以重新送出。",
-		"sales can delete only their own orders":                               "業務只能刪除自己的訂單。",
-		"cannot delete another production line":                                "不能刪除其他產線的訂單。",
-		"role cannot delete orders":                                            "此角色不能刪除訂單。",
-		"cannot delete in-progress or completed orders":                        "不能刪除生產中或已完成的訂單。",
+		"sales can cancel only their own orders":                               "業務只能取消自己的訂單。",
+		"sales can cancel only rejected orders":                                "業務只能取消需業務處理的訂單。",
+		"cannot cancel another production line":                                "不能取消其他產線的訂單。",
+		"role cannot cancel orders":                                            "此角色不能取消訂單。",
+		"cannot cancel in-progress or completed orders":                        "不能取消生產中或已完成的訂單。",
 		"user not found":                                                       "找不到使用者。",
 		"username is required":                                                 "請填寫帳號。",
 		"username already exists":                                              "帳號已存在。",
