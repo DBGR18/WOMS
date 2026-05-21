@@ -22,7 +22,7 @@ import {
   unacceptableDueDateMessage,
 } from "./ui.js";
 
-const statuses = ["待排程", "已排程", "生產中", "已完成", "需業務處理"];
+const statuses = ["待排程", "已排程", "生產中", "已完成", "需業務處理", "已取消"];
 const fallbackLines = ["A", "B", "C", "D"].map((id) => ({
   id,
   name: `Line ${id}`,
@@ -250,12 +250,12 @@ document.getElementById("reject-selected").addEventListener("click", () => {
   openRejectDialog(Array.from(state.selectedOrderIds));
 });
 
-document.getElementById("delete-selected").addEventListener("click", async () => {
+document.getElementById("cancel-selected").addEventListener("click", async () => {
   if (state.selectedOrderIds.size === 0) {
-    showMessage("請先選取訂單", "沒有可以刪除的訂單。", "warn");
+    showMessage("請先選取訂單", "沒有可以取消的訂單。", "warn");
     return;
   }
-  const ok = window.confirm(`確定刪除 ${state.selectedOrderIds.size} 張已選取訂單嗎？`);
+  const ok = window.confirm(`確定取消 ${state.selectedOrderIds.size} 張已選取訂單嗎？`);
   if (!ok) {
     return;
   }
@@ -265,10 +265,10 @@ document.getElementById("delete-selected").addEventListener("click", async () =>
       body: JSON.stringify({ orderIds: Array.from(state.selectedOrderIds) }),
     });
     state.selectedOrderIds.clear();
-    showMessage("刪除完成", `已刪除 ${payload.deletedOrderIds?.length ?? 0} 張訂單。`);
+    showMessage("取消完成", `已取消 ${payload.cancelledOrderIds?.length ?? 0} 張訂單。`);
     await refreshWorkspace();
   } catch (error) {
-    showMessage("刪除失敗", error.message, "warn");
+    showMessage("取消失敗", error.message, "warn");
   }
 });
 
@@ -1469,7 +1469,7 @@ function renderOrderAction(order) {
           <span class="drawer-note">${escapeHtml(order.note || "未填寫")}</span>
         </label>
         <button class="row-action" data-order-action="resubmit-order" data-order-id="${escapeHtml(order.id)}" type="button">重新送出</button>
-        <button class="row-action danger-button" data-order-action="delete-order" data-order-id="${escapeHtml(order.id)}" type="button">刪除訂單</button>
+        <button class="row-action danger-button" data-order-action="cancel-order" data-order-id="${escapeHtml(order.id)}" type="button">取消訂單</button>
       </div>
     `;
   }
@@ -1503,12 +1503,12 @@ async function handleOrderAction(action, orderId, productionDate = "") {
       await refreshWorkspace();
       return;
     }
-    if (action === "delete-order") {
+    if (action === "cancel-order") {
       const payload = await request("/api/orders", {
         method: "DELETE",
         body: JSON.stringify({ orderIds: [orderId] }),
       });
-      showMessage("刪除完成", `已刪除 ${payload.deletedOrderIds?.length ?? 0} 張訂單。`);
+      showMessage("取消完成", `已取消 ${payload.cancelledOrderIds?.length ?? 0} 張訂單。`);
       await refreshWorkspace();
       return;
     }
@@ -1726,6 +1726,7 @@ function scheduleHistoryTitle(action) {
     "schedule.job.create": "排程成功",
     "schedule.job.manual_force": "人工介入",
     "order.reject": "延後處理紀錄",
+    "order.cancel": "訂單取消",
     "production.start": "開始生產",
     "production.confirm.complete": "生產回報",
     "production.confirm.partial": "生產回報",

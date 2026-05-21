@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS orders (
     line_id TEXT NOT NULL REFERENCES production_lines(id),
     quantity INTEGER NOT NULL CHECK (quantity BETWEEN 25 AND 2500),
     priority TEXT NOT NULL CHECK (priority IN ('low', 'high')),
-    status TEXT NOT NULL CHECK (status IN ('待排程', '已排程', '生產中', '已完成', '需業務處理')),
+    status TEXT NOT NULL CHECK (status IN ('待排程', '已排程', '生產中', '已完成', '需業務處理', '已取消')),
     due_date DATE NOT NULL,
     note TEXT,
     created_by TEXT NOT NULL REFERENCES users(id),
@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS schedule_allocations (
     quantity INTEGER NOT NULL CHECK (quantity > 0),
     priority TEXT NOT NULL CHECK (priority IN ('low', 'high')),
     locked BOOLEAN NOT NULL DEFAULT FALSE,
-    status TEXT CHECK (status IN ('待排程', '已排程', '生產中', '已完成', '需業務處理'))
+    status TEXT CHECK (status IN ('待排程', '已排程', '生產中', '已完成', '需業務處理', '已取消'))
 );
 
 CREATE TABLE IF NOT EXISTS audit_logs (
@@ -108,11 +108,11 @@ ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
 ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('admin', 'sales', 'scheduler'));
 ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_status_check;
-ALTER TABLE orders ADD CONSTRAINT orders_status_check CHECK (status IN ('待排程', '已排程', '生產中', '已完成', '需業務處理'));
+ALTER TABLE orders ADD CONSTRAINT orders_status_check CHECK (status IN ('待排程', '已排程', '生產中', '已完成', '需業務處理', '已取消'));
 ALTER TABLE schedule_jobs DROP CONSTRAINT IF EXISTS schedule_jobs_status_check;
 ALTER TABLE schedule_jobs ADD CONSTRAINT schedule_jobs_status_check CHECK (status IN ('queued', 'running', 'completed', 'failed', 'cancelled'));
 ALTER TABLE schedule_allocations DROP CONSTRAINT IF EXISTS schedule_allocations_status_check;
-ALTER TABLE schedule_allocations ADD CONSTRAINT schedule_allocations_status_check CHECK (status IN ('待排程', '已排程', '生產中', '已完成', '需業務處理'));
+ALTER TABLE schedule_allocations ADD CONSTRAINT schedule_allocations_status_check CHECK (status IN ('待排程', '已排程', '生產中', '已完成', '需業務處理', '已取消'));
 
 INSERT INTO production_lines (id, name, capacity_per_day, timezone)
 VALUES

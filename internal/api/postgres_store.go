@@ -151,7 +151,7 @@ func (s *PostgresStore) ListOrders(claims auth.Claims) []domain.Order {
 	FROM orders`
 	args := []any{}
 	if claims.Role == domain.RoleScheduler {
-		query += " WHERE line_id = $1 AND status <> '需業務處理'"
+		query += " WHERE line_id = $1"
 		args = append(args, claims.LineID)
 	} else if claims.Role == domain.RoleSales {
 		query += " WHERE created_by = $1"
@@ -439,14 +439,14 @@ func (s *PostgresStore) CreateDemoConflictOrders(req demoConflictRequest, claims
 	return orders, nil
 }
 
-func (s *PostgresStore) DeleteOrders(req deleteOrdersRequest, claims auth.Claims) (deleteOrdersResponse, error) {
+func (s *PostgresStore) CancelOrders(req cancelOrdersRequest, claims auth.Claims) (cancelOrdersResponse, error) {
 	if len(req.OrderIDs) == 0 {
-		return deleteOrdersResponse{}, errors.New("orderIds is required")
+		return cancelOrdersResponse{}, errors.New("orderIds is required")
 	}
-	result := deleteOrdersResponse{}
+	result := cancelOrdersResponse{}
 	tx, err := s.db.Begin()
 	if err != nil {
-		return deleteOrdersResponse{}, err
+		return cancelOrdersResponse{}, err
 	}
 	defer tx.Rollback()
 	revisions := map[string]bool{}
@@ -457,32 +457,41 @@ func (s *PostgresStore) DeleteOrders(req deleteOrdersRequest, claims auth.Claims
 				result.SkippedOrderIDs = append(result.SkippedOrderIDs, id)
 				continue
 			}
-			return deleteOrdersResponse{}, err
+			return cancelOrdersResponse{}, err
 		}
-		if claims.Role == domain.RoleSales && order.CreatedBy != claims.Subject {
-			return deleteOrdersResponse{}, errors.New("sales can delete only their own orders")
+		if order.Status == domain.StatusCancelled {
+			result.SkippedOrderIDs = append(result.SkippedOrderIDs, id)
+			continue
+		}
+		if claims.Role == domain.RoleSales {
+			if order.CreatedBy != claims.Subject {
+				return cancelOrdersResponse{}, errors.New("sales can cancel only their own orders")
+			}
+			if order.Status != domain.StatusRejected {
+				return cancelOrdersResponse{}, errors.New("sales can cancel only rejected orders")
+			}
 		}
 		if claims.Role == domain.RoleScheduler && order.LineID != claims.LineID {
-			return deleteOrdersResponse{}, errors.New("cannot delete another production line")
+			return cancelOrdersResponse{}, errors.New("cannot cancel another production line")
 		}
 		if order.Status == domain.StatusInProgress || order.Status == domain.StatusCompleted {
-			return deleteOrdersResponse{}, errors.New("cannot delete in-progress or completed orders")
+			return cancelOrdersResponse{}, errors.New("cannot cancel in-progress or completed orders")
 		}
 		if _, err := tx.Exec("DELETE FROM schedule_allocations WHERE order_id = $1", id); err != nil {
-			return deleteOrdersResponse{}, err
+			return cancelOrdersResponse{}, err
 		}
-		if _, err := tx.Exec("DELETE FROM orders WHERE id = $1", id); err != nil {
-			return deleteOrdersResponse{}, err
+		if _, err := tx.Exec("UPDATE orders SET status = $2, updated_at = NOW() WHERE id = $1", id, domain.StatusCancelled); err != nil {
+			return cancelOrdersResponse{}, err
 		}
-		if _, err := insertAuditTx(tx, claims.Subject, "order.delete", id, ""); err != nil {
-			return deleteOrdersResponse{}, err
+		if _, err := insertAuditTx(tx, claims.Subject, "order.cancel", id, ""); err != nil {
+			return cancelOrdersResponse{}, err
 		}
 		revisions[order.LineID] = true
-		result.DeletedOrderIDs = append(result.DeletedOrderIDs, id)
+		result.CancelledOrderIDs = append(result.CancelledOrderIDs, id)
 	}
 	for lineID := range revisions {
 		if _, err := tx.Exec("UPDATE production_lines SET schedule_revision = schedule_revision + 1 WHERE id = $1", lineID); err != nil {
-			return deleteOrdersResponse{}, err
+			return cancelOrdersResponse{}, err
 		}
 	}
 	return result, tx.Commit()
@@ -835,7 +844,7 @@ func (s *PostgresStore) ScheduleHistory(lineID string, claims auth.Claims) ([]do
 		FROM audit_logs a
 		LEFT JOIN orders o ON o.id = a.resource
 		LEFT JOIN schedule_jobs j ON j.id = a.resource
-		WHERE a.action IN ('schedule.job.create','schedule.job.manual_force','schedule.job.complete','schedule.job.fail','order.reject','production.start','production.confirm.complete','production.confirm.partial')`
+		WHERE a.action IN ('schedule.job.create','schedule.job.manual_force','schedule.job.complete','schedule.job.fail','order.reject','order.cancel','production.start','production.confirm.complete','production.confirm.partial')`
 	args := []any{}
 	if lineID != "" {
 		query += " AND (o.line_id = $1 OR j.line_id = $1)"

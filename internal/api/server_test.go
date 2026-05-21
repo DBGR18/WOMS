@@ -1290,7 +1290,7 @@ func TestConflictSolutionCanMoveScheduledLowPriorityOrder(t *testing.T) {
 	}
 }
 
-func TestDeleteOrdersRemovesScheduledAllocation(t *testing.T) {
+func TestCancelOrdersRemovesScheduledAllocation(t *testing.T) {
 	server := NewServer("secret", NewMemoryStore())
 	salesToken := login(t, server, "sales", "demo")
 	createOrder(t, server, salesToken, "A")
@@ -1303,7 +1303,12 @@ func TestDeleteOrdersRemovesScheduledAllocation(t *testing.T) {
 	res := httptest.NewRecorder()
 	server.ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
-		t.Fatalf("delete failed: %d %s", res.Code, res.Body.String())
+		t.Fatalf("cancel failed: %d %s", res.Code, res.Body.String())
+	}
+	if storeOrder, ok := server.store.(*MemoryStore).orders["ORD-0000001"]; ok {
+		if storeOrder.Status != domain.StatusCancelled {
+			t.Fatalf("expected cancelled order, got %+v", storeOrder)
+		}
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/api/schedules/calendar?lineId=A&month=2026-05", nil)
@@ -1541,8 +1546,8 @@ func TestSchedulerRejectsPendingOrdersAndSalesCanResubmit(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+schedulerA)
 	res = httptest.NewRecorder()
 	server.ServeHTTP(res, req)
-	if strings.Contains(res.Body.String(), "ORD-0000001") {
-		t.Fatalf("rejected order should be hidden from scheduler pending queue: %s", res.Body.String())
+	if !strings.Contains(res.Body.String(), "ORD-0000001") || !strings.Contains(res.Body.String(), string(domain.StatusRejected)) {
+		t.Fatalf("rejected order should be visible to scheduler status filters: %s", res.Body.String())
 	}
 
 	body = bytes.NewBufferString(`{"orderId":"ORD-0000001","dueDate":"2026-05-05","quantity":2000}`)

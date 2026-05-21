@@ -94,6 +94,7 @@ export function statusCounts(orders) {
     "生產中": 0,
     "已完成": 0,
     "需業務處理": 0,
+    "已取消": 0,
   };
   for (const order of orders) {
     if (Object.hasOwn(counts, order.status)) {
@@ -192,6 +193,7 @@ export function statusClass(status) {
     "生產中": "status-running",
     "已完成": "status-completed",
     "需業務處理": "status-rejected",
+    "已取消": "status-cancelled",
   }[status] ?? "";
 }
 
@@ -227,6 +229,7 @@ function orderStatusRank(status) {
     "生產中": 2,
     "已完成": 3,
     "需業務處理": 4,
+    "已取消": 5,
   }[status] ?? 99;
 }
 

@@ -590,6 +590,11 @@ textarea {
   color: #912018;
 }
 
+.tag.status-cancelled {
+  background: #f2f4f7;
+  color: #475467;
+}
+
 .batch-bar {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
