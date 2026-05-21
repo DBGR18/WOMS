@@ -1814,22 +1814,31 @@ func (s *MemoryStore) ConfirmProduction(req productionConfirmRequest, claims aut
 		order.Status = domain.StatusCompleted
 		order.UpdatedAt = time.Now().UTC()
 		s.orders[order.ID] = order
-		s.completeProductionAllocationLocked(order.ID, productionDate, req.ProducedQuantity)
+		s.completeProductionAllocationLocked(order.ID, productionDate)
 		s.bumpLineRevisionLocked(order.LineID)
 		s.auditLocked(claims.Subject, "production.confirm.complete", order.ID, "")
 		return productionConfirmResponse{Order: order}, nil
 	}
 
 	originalQuantity := order.Quantity
-	order.Quantity = originalQuantity - req.ProducedQuantity
-	order.Status = domain.StatusPending
-	order.UpdatedAt = time.Now().UTC()
+	now := time.Now().UTC()
+	remainder := *result.Remainder
+	remainder.ID = nextRemainderOrderID(order.ID, order.SourceOrder != "", func(id string) bool {
+		_, ok := s.orders[id]
+		return ok
+	})
+	remainder.CreatedAt = now
+	remainder.UpdatedAt = now
+	order.Quantity = req.ProducedQuantity
+	order.Status = domain.StatusCompleted
+	order.UpdatedAt = now
 	s.orders[order.ID] = order
+	s.orders[remainder.ID] = remainder
 
-	s.replaceOrderAllocationsWithCompletedLocked(order.ID, productionDate, req.ProducedQuantity)
+	s.replaceOrderAllocationsWithCompletedLocked(order.ID, productionDate)
 	s.bumpLineRevisionLocked(order.LineID)
-	s.auditLocked(claims.Subject, "production.confirm.partial", order.ID, "produced "+strconv.Itoa(req.ProducedQuantity)+" of "+strconv.Itoa(originalQuantity)+", remaining "+strconv.Itoa(order.Quantity)+" returned to pending")
-	return productionConfirmResponse{Order: order, Remainder: &order}, nil
+	s.auditLocked(claims.Subject, "production.confirm.partial", order.ID, "produced "+strconv.Itoa(req.ProducedQuantity)+" of "+strconv.Itoa(originalQuantity)+", remainder "+remainder.ID+" quantity "+strconv.Itoa(remainder.Quantity)+" returned to pending")
+	return productionConfirmResponse{Order: order, Remainder: &remainder}, nil
 }
 
 func (s *MemoryStore) planLocked(req scheduleRequest, claims auth.Claims) (scheduler.Result, error) {
@@ -2496,11 +2505,10 @@ func (s *MemoryStore) productionAllocationLocked(orderID string, productionDate 
 	return domain.ScheduleAllocation{}, false
 }
 
-func (s *MemoryStore) completeProductionAllocationLocked(orderID string, productionDate time.Time, producedQuantity int) {
+func (s *MemoryStore) completeProductionAllocationLocked(orderID string, productionDate time.Time) {
 	date := truncateDate(productionDate)
 	for index, allocation := range s.allocations {
 		if allocation.OrderID == orderID && truncateDate(allocation.Date).Equal(date) && allocation.Status != domain.StatusCompleted {
-			s.allocations[index].Quantity = producedQuantity
 			s.allocations[index].Locked = true
 			s.allocations[index].Status = domain.StatusCompleted
 			return
@@ -2508,7 +2516,7 @@ func (s *MemoryStore) completeProductionAllocationLocked(orderID string, product
 	}
 }
 
-func (s *MemoryStore) replaceOrderAllocationsWithCompletedLocked(orderID string, productionDate time.Time, producedQuantity int) {
+func (s *MemoryStore) replaceOrderAllocationsWithCompletedLocked(orderID string, productionDate time.Time) {
 	date := truncateDate(productionDate)
 	completed := domain.ScheduleAllocation{}
 	kept := s.allocations[:0]
@@ -2523,7 +2531,6 @@ func (s *MemoryStore) replaceOrderAllocationsWithCompletedLocked(orderID string,
 		}
 		if truncateDate(allocation.Date).Equal(date) && completed.OrderID == "" {
 			completed = allocation
-			completed.Quantity = producedQuantity
 			completed.Locked = true
 			completed.Status = domain.StatusCompleted
 		}

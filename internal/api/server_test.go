@@ -1493,17 +1493,72 @@ func TestPartialProductionReturnsRemainderToPendingQueue(t *testing.T) {
 	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode production response: %v", err)
 	}
-	if payload.Order.ID != "ORD-0000001" || payload.Order.Status != domain.StatusPending || payload.Order.Quantity != 1700 {
-		t.Fatalf("expected original order to return pending with remaining quantity, got %+v", payload.Order)
+	if payload.Order.ID != "ORD-0000001" || payload.Order.Status != domain.StatusCompleted || payload.Order.Quantity != 800 {
+		t.Fatalf("expected original order to be completed with produced quantity, got %+v", payload.Order)
 	}
-	if payload.Remainder == nil || payload.Remainder.ID != "ORD-0000001" || payload.Remainder.Quantity != 1700 || payload.Remainder.Status != domain.StatusPending {
+	if payload.Remainder == nil || payload.Remainder.ID != "ORD-0000001-1" || payload.Remainder.Quantity != 1700 || payload.Remainder.Status != domain.StatusPending || payload.Remainder.SourceOrder != "ORD-0000001" {
 		t.Fatalf("unexpected remainder: %+v", payload.Remainder)
+	}
+	if store.orders["ORD-0000001-1"].Quantity != 1700 || store.orders["ORD-0000001-1"].Status != domain.StatusPending {
+		t.Fatalf("expected independent pending remainder order, got %+v", store.orders["ORD-0000001-1"])
 	}
 	if len(store.allocations) != 1 {
 		t.Fatalf("expected partial production to keep one completed allocation, got %+v", store.allocations)
 	}
-	if store.allocations[0].OrderID != "ORD-0000001" || store.allocations[0].Quantity != 800 || store.allocations[0].Status != domain.StatusCompleted || !store.allocations[0].Date.Equal(mustAPIDate(t, "2026-05-01")) {
-		t.Fatalf("expected completed May 1 allocation for produced quantity, got %+v", store.allocations[0])
+	if store.allocations[0].OrderID != "ORD-0000001" || store.allocations[0].Quantity != 900 || store.allocations[0].Status != domain.StatusCompleted || !store.allocations[0].Date.Equal(mustAPIDate(t, "2026-05-01")) {
+		t.Fatalf("expected completed May 1 allocation to keep scheduled quantity, got %+v", store.allocations[0])
+	}
+}
+
+func TestPartialProductionDoesNotFreeScheduledCapacity(t *testing.T) {
+	store := NewMemoryStore()
+	server := NewServer("secret", store)
+	salesToken := login(t, server, "sales", "demo")
+	for range 4 {
+		createOrder(t, server, salesToken, "A")
+	}
+	schedulerA := login(t, server, "scheduler-a", "demo")
+	createScheduleJob(t, server, schedulerA, "A")
+	startProduction(t, server, schedulerA, "ORD-0000001")
+
+	body := bytes.NewBufferString(`{"orderId":"ORD-0000001","productionDate":"2026-05-01","producedQuantity":2000}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/production/confirm", body)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("confirm production failed: %d %s", res.Code, res.Body.String())
+	}
+
+	body = bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","currentDate":"2026-04-30","orderIds":["ORD-0000001-1"]}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("preview remainder failed: %d %s", res.Code, res.Body.String())
+	}
+	var preview schedulePreviewResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &preview); err != nil {
+		t.Fatalf("decode preview response: %v", err)
+	}
+	if len(preview.Allocations) == 0 {
+		t.Fatalf("expected remainder allocation, got none")
+	}
+	if got := preview.Allocations[0].Date.Format(dateLayout); got == "2026-05-01" {
+		t.Fatalf("expected full scheduled capacity on 2026-05-01 to stay consumed, got remainder allocation on %s", got)
+	}
+}
+
+func TestRemainderOrderIDIncrementsExistingSuffix(t *testing.T) {
+	existing := map[string]bool{
+		"ORD-0000001-2": true,
+	}
+	got := nextRemainderOrderID("ORD-0000001-1", true, func(id string) bool {
+		return existing[id]
+	})
+	if got != "ORD-0000001-3" {
+		t.Fatalf("expected next suffixed remainder ID, got %s", got)
 	}
 }
 
