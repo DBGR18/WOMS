@@ -1444,10 +1444,17 @@ function renderCalendarItem(allocation) {
   return `
     <${tag} class="calendar-item ${priorityClass(allocation.priority)} ${allocation.preview ? "preview-item-inline" : ""}" ${attrs}>
       <strong>${escapeHtml(allocation.orderId)}</strong>
-      <span>${escapeHtml(allocation.customer ?? "Preview")} · ${allocation.quantity.toLocaleString()} 片</span>
+      <span>${escapeHtml(allocation.customer ?? "Preview")} · ${calendarDisplayQuantity(allocation).toLocaleString()} 片</span>
       <span>${priorityLabel(allocation.priority)} · ${escapeHtml(allocation.status ?? "試排")}</span>
     </${tag}>
   `;
+}
+
+function calendarDisplayQuantity(allocation) {
+  if (allocation.status === statuses[3] && Number(allocation.completedQuantity ?? 0) > 0) {
+    return Number(allocation.completedQuantity);
+  }
+  return Number(allocation.quantity ?? 0);
 }
 
 function handleCalendarOrderClick(orderId, productionDate = "") {

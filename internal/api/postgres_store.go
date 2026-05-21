@@ -764,7 +764,7 @@ func (s *PostgresStore) ScheduleCalendar(lineID, month string, claims auth.Claim
 	calendarStart := monthStart.AddDate(0, 0, -int(monthStart.Weekday()))
 	calendarEnd := calendarStart.AddDate(0, 0, 42)
 	rows, err := s.db.Query(`
-		SELECT a.order_id, o.customer, a.line_id, a.allocation_date, a.quantity, a.priority, COALESCE(a.status, o.status), a.locked, o.due_date
+		SELECT a.order_id, o.customer, a.line_id, a.allocation_date, a.quantity, CASE WHEN COALESCE(a.status, o.status) = '已完成' THEN o.quantity ELSE 0 END, a.priority, COALESCE(a.status, o.status), a.locked, o.due_date
 		FROM schedule_allocations a
 		JOIN orders o ON o.id = a.order_id
 		WHERE a.line_id = $1 AND a.allocation_date >= $2 AND a.allocation_date < $3
@@ -777,7 +777,7 @@ func (s *PostgresStore) ScheduleCalendar(lineID, month string, claims auth.Claim
 	allocations := []calendarAllocation{}
 	for rows.Next() {
 		var allocation calendarAllocation
-		if err := rows.Scan(&allocation.OrderID, &allocation.Customer, &allocation.LineID, &allocation.Date, &allocation.Quantity, &allocation.Priority, &allocation.Status, &allocation.Locked, &allocation.DueDate); err != nil {
+		if err := rows.Scan(&allocation.OrderID, &allocation.Customer, &allocation.LineID, &allocation.Date, &allocation.Quantity, &allocation.CompletedQuantity, &allocation.Priority, &allocation.Status, &allocation.Locked, &allocation.DueDate); err != nil {
 			return calendarResponse{}, err
 		}
 		allocations = append(allocations, allocation)
@@ -1012,6 +1012,40 @@ func (s *PostgresStore) ConfirmProduction(req productionConfirmRequest, claims a
 		return productionConfirmResponse{Order: order}, nil
 	}
 	return productionConfirmResponse{Order: order, Remainder: remainder}, nil
+}
+
+func (s *PostgresStore) splitAllocationOrderIDsDB(allocations []scheduler.Allocation) ([]scheduler.Allocation, error) {
+	seen := map[string]int{}
+	reserved := map[string]bool{}
+	normalized := make([]scheduler.Allocation, 0, len(allocations))
+	for _, allocation := range allocations {
+		seen[allocation.OrderID]++
+		if seen[allocation.OrderID] == 1 {
+			normalized = append(normalized, allocation)
+			continue
+		}
+		source, err := s.order(allocation.OrderID)
+		if err != nil {
+			return nil, err
+		}
+		sourceID := allocation.OrderID
+		allocation.SourceOrderID = sourceID
+		var existsErr error
+		allocation.OrderID = nextRemainderOrderID(sourceID, source.SourceOrder != "", func(id string) bool {
+			if existsErr != nil {
+				return false
+			}
+			var exists bool
+			existsErr = s.db.QueryRow("SELECT EXISTS (SELECT 1 FROM orders WHERE id = $1)", id).Scan(&exists)
+			return existsErr != nil || exists || reserved[id]
+		})
+		if existsErr != nil {
+			return nil, existsErr
+		}
+		reserved[allocation.OrderID] = true
+		normalized = append(normalized, allocation)
+	}
+	return normalized, nil
 }
 
 func (s *PostgresStore) nextRemainderOrderIDTx(tx *sql.Tx, originalID string, incrementExistingSuffix bool) (string, error) {
@@ -1352,6 +1386,10 @@ func (s *PostgresStore) previewFromDB(req scheduleRequest, claims auth.Claims) (
 		ForceReason:         req.Reason,
 		AllowLateCompletion: req.AllowLateCompletion,
 	})
+	if err != nil {
+		return scheduler.Result{}, previewFromDBResult{}, err
+	}
+	result.Allocations, err = s.splitAllocationOrderIDsDB(result.Allocations)
 	if err != nil {
 		return scheduler.Result{}, previewFromDBResult{}, err
 	}

@@ -1385,6 +1385,7 @@ func (s *MemoryStore) PreviewSchedule(req scheduleRequest, claims auth.Claims) (
 	if err != nil {
 		return schedulePreviewResponse{}, err
 	}
+	result.Allocations, _ = s.splitAllocationOrderIDsLocked(result.Allocations)
 	lineID := scheduleLineID(req, claims)
 	id := "PREVIEW-" + strconv.Itoa(s.nextPreviewID)
 	s.nextPreviewID++
@@ -1574,15 +1575,16 @@ func (s *MemoryStore) previewClaimsLocked(previewID, lineID string) auth.Claims 
 }
 
 type calendarAllocation struct {
-	OrderID  string             `json:"orderId"`
-	Customer string             `json:"customer"`
-	LineID   string             `json:"lineId"`
-	Date     time.Time          `json:"date"`
-	Quantity int                `json:"quantity"`
-	Priority domain.Priority    `json:"priority"`
-	Status   domain.OrderStatus `json:"status"`
-	Locked   bool               `json:"locked"`
-	DueDate  time.Time          `json:"dueDate"`
+	OrderID           string             `json:"orderId"`
+	Customer          string             `json:"customer"`
+	LineID            string             `json:"lineId"`
+	Date              time.Time          `json:"date"`
+	Quantity          int                `json:"quantity"`
+	CompletedQuantity int                `json:"completedQuantity,omitempty"`
+	Priority          domain.Priority    `json:"priority"`
+	Status            domain.OrderStatus `json:"status"`
+	Locked            bool               `json:"locked"`
+	DueDate           time.Time          `json:"dueDate"`
 }
 
 type calendarResponse struct {
@@ -1637,16 +1639,21 @@ func (s *MemoryStore) ScheduleCalendar(lineID, month string, claims auth.Claims)
 		if status == "" {
 			status = order.Status
 		}
+		completedQuantity := 0
+		if status == domain.StatusCompleted {
+			completedQuantity = order.Quantity
+		}
 		allocations = append(allocations, calendarAllocation{
-			OrderID:  allocation.OrderID,
-			Customer: order.Customer,
-			LineID:   allocation.LineID,
-			Date:     allocationDate,
-			Quantity: allocation.Quantity,
-			Priority: allocation.Priority,
-			Status:   status,
-			Locked:   allocation.Locked,
-			DueDate:  order.DueDate,
+			OrderID:           allocation.OrderID,
+			Customer:          order.Customer,
+			LineID:            allocation.LineID,
+			Date:              allocationDate,
+			Quantity:          allocation.Quantity,
+			CompletedQuantity: completedQuantity,
+			Priority:          allocation.Priority,
+			Status:            status,
+			Locked:            allocation.Locked,
+			DueDate:           order.DueDate,
 		})
 	}
 	sort.Slice(allocations, func(i, j int) bool {
@@ -1995,10 +2002,67 @@ func canPersistConflicts(req scheduleRequest, conflicts []scheduler.Conflict) bo
 	return true
 }
 
+func (s *MemoryStore) splitAllocationOrderIDsLocked(allocations []scheduler.Allocation) ([]scheduler.Allocation, map[string]int) {
+	seen := map[string]int{}
+	reserved := map[string]bool{}
+	firstQuantities := map[string]int{}
+	normalized := make([]scheduler.Allocation, 0, len(allocations))
+	for _, allocation := range allocations {
+		seen[allocation.OrderID]++
+		if seen[allocation.OrderID] == 1 {
+			firstQuantities[allocation.OrderID] = allocation.Quantity
+			normalized = append(normalized, allocation)
+			continue
+		}
+		source, ok := s.orders[allocation.OrderID]
+		if !ok {
+			normalized = append(normalized, allocation)
+			continue
+		}
+		sourceID := allocation.OrderID
+		allocation.SourceOrderID = sourceID
+		allocation.OrderID = nextRemainderOrderID(sourceID, source.SourceOrder != "", func(id string) bool {
+			_, exists := s.orders[id]
+			return exists || reserved[id]
+		})
+		reserved[allocation.OrderID] = true
+		normalized = append(normalized, allocation)
+	}
+	return normalized, firstQuantities
+}
+
 func (s *MemoryStore) persistAllocationsLocked(allocations []scheduler.Allocation) {
+	allocations, firstQuantities := s.splitAllocationOrderIDsLocked(allocations)
+	for sourceID, firstQuantity := range firstQuantities {
+		order, ok := s.orders[sourceID]
+		if ok && order.Quantity != firstQuantity {
+			order.Quantity = firstQuantity
+			order.UpdatedAt = time.Now().UTC()
+			s.orders[sourceID] = order
+		}
+	}
+	for _, allocation := range allocations {
+		if allocation.SourceOrderID == "" {
+			continue
+		}
+		if _, exists := s.orders[allocation.OrderID]; exists {
+			continue
+		}
+		source := s.orders[allocation.SourceOrderID]
+		source.ID = allocation.OrderID
+		source.Quantity = allocation.Quantity
+		source.Status = domain.StatusPending
+		source.SourceOrder = allocation.SourceOrderID
+		source.CreatedAt = time.Now().UTC()
+		source.UpdatedAt = source.CreatedAt
+		s.orders[source.ID] = source
+	}
 	replacedOrderIDs := map[string]bool{}
 	for _, allocation := range allocations {
 		replacedOrderIDs[allocation.OrderID] = true
+		if allocation.SourceOrderID != "" {
+			replacedOrderIDs[allocation.SourceOrderID] = true
+		}
 	}
 	s.removeOpenAllocationsForOrdersLocked(replacedOrderIDs)
 	for _, allocation := range allocations {
