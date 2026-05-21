@@ -454,6 +454,33 @@ func persistPreviewAllocations(ctx context.Context, tx *sql.Tx, job domain.Sched
 		}
 		orderIDs[allocation.OrderID] = true
 	}
+	sourceFirstQuantities := map[string]int{}
+	splitAllocations := []scheduler.Allocation{}
+	for _, allocation := range allocations {
+		if allocation.SourceOrderID == "" {
+			if _, ok := sourceFirstQuantities[allocation.OrderID]; !ok {
+				sourceFirstQuantities[allocation.OrderID] = allocation.Quantity
+			}
+			continue
+		}
+		splitAllocations = append(splitAllocations, allocation)
+	}
+	for _, allocation := range splitAllocations {
+		if firstQuantity, ok := sourceFirstQuantities[allocation.SourceOrderID]; ok {
+			if _, err := tx.ExecContext(ctx, "UPDATE orders SET quantity = $2, updated_at = NOW() WHERE id = $1", allocation.SourceOrderID, firstQuantity); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO orders (id, customer, line_id, quantity, priority, status, due_date, note, created_by, source_order, created_at, updated_at)
+			SELECT $1, customer, line_id, $2, priority, '待排程', due_date, note, created_by, $3, NOW(), NOW()
+			FROM orders
+			WHERE id = $3
+			ON CONFLICT (id) DO NOTHING
+		`, allocation.OrderID, allocation.Quantity, allocation.SourceOrderID); err != nil {
+			return err
+		}
+	}
 	for orderID := range orderIDs {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM schedule_allocations WHERE order_id = $1 AND COALESCE(status, '已排程') <> '已完成'", orderID); err != nil {
 			return err

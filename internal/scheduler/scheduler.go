@@ -30,12 +30,13 @@ type ExistingAllocation struct {
 }
 
 type Allocation struct {
-	OrderID  string          `json:"orderId"`
-	LineID   string          `json:"lineId"`
-	Date     time.Time       `json:"date"`
-	Quantity int             `json:"quantity"`
-	Priority domain.Priority `json:"priority"`
-	Locked   bool            `json:"locked"`
+	OrderID       string          `json:"orderId"`
+	SourceOrderID string          `json:"sourceOrderId,omitempty"`
+	LineID        string          `json:"lineId"`
+	Date          time.Time       `json:"date"`
+	Quantity      int             `json:"quantity"`
+	Priority      domain.Priority `json:"priority"`
+	Locked        bool            `json:"locked"`
 }
 
 type Conflict struct {

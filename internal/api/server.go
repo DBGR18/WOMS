@@ -1385,6 +1385,7 @@ func (s *MemoryStore) PreviewSchedule(req scheduleRequest, claims auth.Claims) (
 	if err != nil {
 		return schedulePreviewResponse{}, err
 	}
+	result.Allocations, _ = s.splitAllocationOrderIDsLocked(result.Allocations)
 	lineID := scheduleLineID(req, claims)
 	id := "PREVIEW-" + strconv.Itoa(s.nextPreviewID)
 	s.nextPreviewID++
@@ -1574,15 +1575,16 @@ func (s *MemoryStore) previewClaimsLocked(previewID, lineID string) auth.Claims 
 }
 
 type calendarAllocation struct {
-	OrderID  string             `json:"orderId"`
-	Customer string             `json:"customer"`
-	LineID   string             `json:"lineId"`
-	Date     time.Time          `json:"date"`
-	Quantity int                `json:"quantity"`
-	Priority domain.Priority    `json:"priority"`
-	Status   domain.OrderStatus `json:"status"`
-	Locked   bool               `json:"locked"`
-	DueDate  time.Time          `json:"dueDate"`
+	OrderID           string             `json:"orderId"`
+	Customer          string             `json:"customer"`
+	LineID            string             `json:"lineId"`
+	Date              time.Time          `json:"date"`
+	Quantity          int                `json:"quantity"`
+	CompletedQuantity int                `json:"completedQuantity,omitempty"`
+	Priority          domain.Priority    `json:"priority"`
+	Status            domain.OrderStatus `json:"status"`
+	Locked            bool               `json:"locked"`
+	DueDate           time.Time          `json:"dueDate"`
 }
 
 type calendarResponse struct {
@@ -1637,16 +1639,21 @@ func (s *MemoryStore) ScheduleCalendar(lineID, month string, claims auth.Claims)
 		if status == "" {
 			status = order.Status
 		}
+		completedQuantity := 0
+		if status == domain.StatusCompleted {
+			completedQuantity = order.Quantity
+		}
 		allocations = append(allocations, calendarAllocation{
-			OrderID:  allocation.OrderID,
-			Customer: order.Customer,
-			LineID:   allocation.LineID,
-			Date:     allocationDate,
-			Quantity: allocation.Quantity,
-			Priority: allocation.Priority,
-			Status:   status,
-			Locked:   allocation.Locked,
-			DueDate:  order.DueDate,
+			OrderID:           allocation.OrderID,
+			Customer:          order.Customer,
+			LineID:            allocation.LineID,
+			Date:              allocationDate,
+			Quantity:          allocation.Quantity,
+			CompletedQuantity: completedQuantity,
+			Priority:          allocation.Priority,
+			Status:            status,
+			Locked:            allocation.Locked,
+			DueDate:           order.DueDate,
 		})
 	}
 	sort.Slice(allocations, func(i, j int) bool {
@@ -1814,22 +1821,31 @@ func (s *MemoryStore) ConfirmProduction(req productionConfirmRequest, claims aut
 		order.Status = domain.StatusCompleted
 		order.UpdatedAt = time.Now().UTC()
 		s.orders[order.ID] = order
-		s.completeProductionAllocationLocked(order.ID, productionDate, req.ProducedQuantity)
+		s.completeProductionAllocationLocked(order.ID, productionDate)
 		s.bumpLineRevisionLocked(order.LineID)
 		s.auditLocked(claims.Subject, "production.confirm.complete", order.ID, "")
 		return productionConfirmResponse{Order: order}, nil
 	}
 
 	originalQuantity := order.Quantity
-	order.Quantity = originalQuantity - req.ProducedQuantity
-	order.Status = domain.StatusPending
-	order.UpdatedAt = time.Now().UTC()
+	now := time.Now().UTC()
+	remainder := *result.Remainder
+	remainder.ID = nextRemainderOrderID(order.ID, order.SourceOrder != "", func(id string) bool {
+		_, ok := s.orders[id]
+		return ok
+	})
+	remainder.CreatedAt = now
+	remainder.UpdatedAt = now
+	order.Quantity = req.ProducedQuantity
+	order.Status = domain.StatusCompleted
+	order.UpdatedAt = now
 	s.orders[order.ID] = order
+	s.orders[remainder.ID] = remainder
 
-	s.replaceOrderAllocationsWithCompletedLocked(order.ID, productionDate, req.ProducedQuantity)
+	s.replaceOrderAllocationsWithCompletedLocked(order.ID, productionDate)
 	s.bumpLineRevisionLocked(order.LineID)
-	s.auditLocked(claims.Subject, "production.confirm.partial", order.ID, "produced "+strconv.Itoa(req.ProducedQuantity)+" of "+strconv.Itoa(originalQuantity)+", remaining "+strconv.Itoa(order.Quantity)+" returned to pending")
-	return productionConfirmResponse{Order: order, Remainder: &order}, nil
+	s.auditLocked(claims.Subject, "production.confirm.partial", order.ID, "produced "+strconv.Itoa(req.ProducedQuantity)+" of "+strconv.Itoa(originalQuantity)+", remainder "+remainder.ID+" quantity "+strconv.Itoa(remainder.Quantity)+" returned to pending")
+	return productionConfirmResponse{Order: order, Remainder: &remainder}, nil
 }
 
 func (s *MemoryStore) planLocked(req scheduleRequest, claims auth.Claims) (scheduler.Result, error) {
@@ -1986,10 +2002,67 @@ func canPersistConflicts(req scheduleRequest, conflicts []scheduler.Conflict) bo
 	return true
 }
 
+func (s *MemoryStore) splitAllocationOrderIDsLocked(allocations []scheduler.Allocation) ([]scheduler.Allocation, map[string]int) {
+	seen := map[string]int{}
+	reserved := map[string]bool{}
+	firstQuantities := map[string]int{}
+	normalized := make([]scheduler.Allocation, 0, len(allocations))
+	for _, allocation := range allocations {
+		seen[allocation.OrderID]++
+		if seen[allocation.OrderID] == 1 {
+			firstQuantities[allocation.OrderID] = allocation.Quantity
+			normalized = append(normalized, allocation)
+			continue
+		}
+		source, ok := s.orders[allocation.OrderID]
+		if !ok {
+			normalized = append(normalized, allocation)
+			continue
+		}
+		sourceID := allocation.OrderID
+		allocation.SourceOrderID = sourceID
+		allocation.OrderID = nextRemainderOrderID(sourceID, source.SourceOrder != "", func(id string) bool {
+			_, exists := s.orders[id]
+			return exists || reserved[id]
+		})
+		reserved[allocation.OrderID] = true
+		normalized = append(normalized, allocation)
+	}
+	return normalized, firstQuantities
+}
+
 func (s *MemoryStore) persistAllocationsLocked(allocations []scheduler.Allocation) {
+	allocations, firstQuantities := s.splitAllocationOrderIDsLocked(allocations)
+	for sourceID, firstQuantity := range firstQuantities {
+		order, ok := s.orders[sourceID]
+		if ok && order.Quantity != firstQuantity {
+			order.Quantity = firstQuantity
+			order.UpdatedAt = time.Now().UTC()
+			s.orders[sourceID] = order
+		}
+	}
+	for _, allocation := range allocations {
+		if allocation.SourceOrderID == "" {
+			continue
+		}
+		if _, exists := s.orders[allocation.OrderID]; exists {
+			continue
+		}
+		source := s.orders[allocation.SourceOrderID]
+		source.ID = allocation.OrderID
+		source.Quantity = allocation.Quantity
+		source.Status = domain.StatusPending
+		source.SourceOrder = allocation.SourceOrderID
+		source.CreatedAt = time.Now().UTC()
+		source.UpdatedAt = source.CreatedAt
+		s.orders[source.ID] = source
+	}
 	replacedOrderIDs := map[string]bool{}
 	for _, allocation := range allocations {
 		replacedOrderIDs[allocation.OrderID] = true
+		if allocation.SourceOrderID != "" {
+			replacedOrderIDs[allocation.SourceOrderID] = true
+		}
 	}
 	s.removeOpenAllocationsForOrdersLocked(replacedOrderIDs)
 	for _, allocation := range allocations {
@@ -2496,11 +2569,10 @@ func (s *MemoryStore) productionAllocationLocked(orderID string, productionDate 
 	return domain.ScheduleAllocation{}, false
 }
 
-func (s *MemoryStore) completeProductionAllocationLocked(orderID string, productionDate time.Time, producedQuantity int) {
+func (s *MemoryStore) completeProductionAllocationLocked(orderID string, productionDate time.Time) {
 	date := truncateDate(productionDate)
 	for index, allocation := range s.allocations {
 		if allocation.OrderID == orderID && truncateDate(allocation.Date).Equal(date) && allocation.Status != domain.StatusCompleted {
-			s.allocations[index].Quantity = producedQuantity
 			s.allocations[index].Locked = true
 			s.allocations[index].Status = domain.StatusCompleted
 			return
@@ -2508,7 +2580,7 @@ func (s *MemoryStore) completeProductionAllocationLocked(orderID string, product
 	}
 }
 
-func (s *MemoryStore) replaceOrderAllocationsWithCompletedLocked(orderID string, productionDate time.Time, producedQuantity int) {
+func (s *MemoryStore) replaceOrderAllocationsWithCompletedLocked(orderID string, productionDate time.Time) {
 	date := truncateDate(productionDate)
 	completed := domain.ScheduleAllocation{}
 	kept := s.allocations[:0]
@@ -2523,7 +2595,6 @@ func (s *MemoryStore) replaceOrderAllocationsWithCompletedLocked(orderID string,
 		}
 		if truncateDate(allocation.Date).Equal(date) && completed.OrderID == "" {
 			completed = allocation
-			completed.Quantity = producedQuantity
 			completed.Locked = true
 			completed.Status = domain.StatusCompleted
 		}
@@ -2783,6 +2854,26 @@ func orderIDFromSequence(seq int) string {
 
 func orderIDFromTime(now time.Time) string {
 	return fmt.Sprintf("ORD-%0*d", orderIDDigits, now.UnixNano()%orderIDModulo)
+}
+
+func nextRemainderOrderID(originalID string, incrementExistingSuffix bool, exists func(string) bool) string {
+	base := originalID
+	next := 1
+	if incrementExistingSuffix {
+		if split := strings.LastIndex(originalID, "-"); split > len("ORD-") {
+			if suffix, err := strconv.Atoi(originalID[split+1:]); err == nil {
+				base = originalID[:split]
+				next = suffix + 1
+			}
+		}
+	}
+	for {
+		candidate := fmt.Sprintf("%s-%d", base, next)
+		if !exists(candidate) {
+			return candidate
+		}
+		next++
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

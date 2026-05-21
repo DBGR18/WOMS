@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1235,7 +1236,7 @@ func TestConflictSolutionCanMoveScheduledLowPriorityOrder(t *testing.T) {
 	}
 	schedulerA := login(t, server, "scheduler-a", "demo")
 	createScheduleJob(t, server, schedulerA, "A")
-	newOrderID := createOrderWithPriorityAndDue(t, server, salesToken, "A", "high", "2026-05-01")
+	newOrderID := createOrderWithQuantityPriorityAndDue(t, server, salesToken, "A", 500, "high", "2026-05-01")
 
 	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","currentDate":"2026-04-30","orderIds":["` + newOrderID + `"]}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
@@ -1280,8 +1281,9 @@ func TestConflictSolutionCanMoveScheduledLowPriorityOrder(t *testing.T) {
 	if len(solutionPreview.Conflicts) != 0 {
 		t.Fatalf("expected conflict-free solution preview, got %+v", solutionPreview.Conflicts)
 	}
-	if !hasAllocationOnDate(solutionPreview.Allocations, newOrderID, "2026-05-01") || !hasAllocationOnDate(solutionPreview.Allocations, movableOrderID, "2026-05-02") {
-		t.Fatalf("expected high priority order on due date and moved low priority order on next day, got %+v", solutionPreview.Allocations)
+	splitOrderID := movableOrderID + "-1"
+	if !hasAllocationOnDate(solutionPreview.Allocations, newOrderID, "2026-05-01") || !hasAllocationOnDate(solutionPreview.Allocations, movableOrderID, "2026-05-01") || !hasAllocationOnDate(solutionPreview.Allocations, splitOrderID, "2026-05-02") {
+		t.Fatalf("expected high priority order on due date and split low priority order across two independent IDs, got %+v", solutionPreview.Allocations)
 	}
 
 	body = bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","currentDate":"2026-04-30","orderIds":["` + newOrderID + `"],"resolutionOrderIds":["` + movableOrderID + `"],"allowLateCompletion":true,"previewId":"` + solutionPreview.PreviewID + `"}`)
@@ -1299,8 +1301,11 @@ func TestConflictSolutionCanMoveScheduledLowPriorityOrder(t *testing.T) {
 	if job.Status != domain.JobCompleted {
 		t.Fatalf("expected completed solution job, got %+v", job)
 	}
-	if allocationCountForOrder(store.allocations, movableOrderID) != 1 {
-		t.Fatalf("expected moved order to have one replacement allocation, got %+v", store.allocations)
+	if allocationCountForOrder(store.allocations, movableOrderID) != 1 || allocationCountForOrder(store.allocations, splitOrderID) != 1 {
+		t.Fatalf("expected moved order split allocations to use independent IDs, got %+v", store.allocations)
+	}
+	if store.orders[movableOrderID].Quantity != 2000 || store.orders[splitOrderID].Quantity != 500 || store.orders[splitOrderID].SourceOrder != movableOrderID {
+		t.Fatalf("expected independent split order records, source=%+v split=%+v", store.orders[movableOrderID], store.orders[splitOrderID])
 	}
 }
 
@@ -1493,17 +1498,88 @@ func TestPartialProductionReturnsRemainderToPendingQueue(t *testing.T) {
 	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode production response: %v", err)
 	}
-	if payload.Order.ID != "ORD-0000001" || payload.Order.Status != domain.StatusPending || payload.Order.Quantity != 1700 {
-		t.Fatalf("expected original order to return pending with remaining quantity, got %+v", payload.Order)
+	if payload.Order.ID != "ORD-0000001" || payload.Order.Status != domain.StatusCompleted || payload.Order.Quantity != 800 {
+		t.Fatalf("expected original order to be completed with produced quantity, got %+v", payload.Order)
 	}
-	if payload.Remainder == nil || payload.Remainder.ID != "ORD-0000001" || payload.Remainder.Quantity != 1700 || payload.Remainder.Status != domain.StatusPending {
+	if payload.Remainder == nil || payload.Remainder.ID != "ORD-0000001-1" || payload.Remainder.Quantity != 1700 || payload.Remainder.Status != domain.StatusPending || payload.Remainder.SourceOrder != "ORD-0000001" {
 		t.Fatalf("unexpected remainder: %+v", payload.Remainder)
+	}
+	if store.orders["ORD-0000001-1"].Quantity != 1700 || store.orders["ORD-0000001-1"].Status != domain.StatusPending {
+		t.Fatalf("expected independent pending remainder order, got %+v", store.orders["ORD-0000001-1"])
 	}
 	if len(store.allocations) != 1 {
 		t.Fatalf("expected partial production to keep one completed allocation, got %+v", store.allocations)
 	}
-	if store.allocations[0].OrderID != "ORD-0000001" || store.allocations[0].Quantity != 800 || store.allocations[0].Status != domain.StatusCompleted || !store.allocations[0].Date.Equal(mustAPIDate(t, "2026-05-01")) {
-		t.Fatalf("expected completed May 1 allocation for produced quantity, got %+v", store.allocations[0])
+	if store.allocations[0].OrderID != "ORD-0000001" || store.allocations[0].Quantity != 900 || store.allocations[0].Status != domain.StatusCompleted || !store.allocations[0].Date.Equal(mustAPIDate(t, "2026-05-01")) {
+		t.Fatalf("expected completed May 1 allocation to keep scheduled quantity, got %+v", store.allocations[0])
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/schedules/calendar?lineId=A&month=2026-05", nil)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("calendar failed: %d %s", res.Code, res.Body.String())
+	}
+	var calendar calendarResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &calendar); err != nil {
+		t.Fatalf("decode calendar response: %v", err)
+	}
+	if len(calendar.Allocations) != 1 || calendar.Allocations[0].Quantity != 900 || calendar.Allocations[0].CompletedQuantity != 800 {
+		t.Fatalf("expected calendar to keep scheduled quantity and expose completed quantity, got %+v", calendar.Allocations)
+	}
+
+}
+
+func TestPartialProductionDoesNotFreeScheduledCapacity(t *testing.T) {
+	store := NewMemoryStore()
+	server := NewServer("secret", store)
+	salesToken := login(t, server, "sales", "demo")
+	for range 4 {
+		createOrder(t, server, salesToken, "A")
+	}
+	schedulerA := login(t, server, "scheduler-a", "demo")
+	createScheduleJob(t, server, schedulerA, "A")
+	startProduction(t, server, schedulerA, "ORD-0000001")
+
+	body := bytes.NewBufferString(`{"orderId":"ORD-0000001","productionDate":"2026-05-01","producedQuantity":2000}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/production/confirm", body)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("confirm production failed: %d %s", res.Code, res.Body.String())
+	}
+
+	body = bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","currentDate":"2026-04-30","orderIds":["ORD-0000001-1"]}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("preview remainder failed: %d %s", res.Code, res.Body.String())
+	}
+	var preview schedulePreviewResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &preview); err != nil {
+		t.Fatalf("decode preview response: %v", err)
+	}
+	if len(preview.Allocations) == 0 {
+		t.Fatalf("expected remainder allocation, got none")
+	}
+	if got := preview.Allocations[0].Date.Format(dateLayout); got == "2026-05-01" {
+		t.Fatalf("expected full scheduled capacity on 2026-05-01 to stay consumed, got remainder allocation on %s", got)
+	}
+}
+
+func TestRemainderOrderIDIncrementsExistingSuffix(t *testing.T) {
+	existing := map[string]bool{
+		"ORD-0000001-2": true,
+	}
+	got := nextRemainderOrderID("ORD-0000001-1", true, func(id string) bool {
+		return existing[id]
+	})
+	if got != "ORD-0000001-3" {
+		t.Fatalf("expected next suffixed remainder ID, got %s", got)
 	}
 }
 
@@ -1713,6 +1789,23 @@ func createOrder(t *testing.T, server *Server, token, lineID string) {
 func createOrderWithPriority(t *testing.T, server *Server, token, lineID, priority string) string {
 	t.Helper()
 	return createOrderWithPriorityAndDue(t, server, token, lineID, priority, "2026-05-03")
+}
+
+func createOrderWithQuantityPriorityAndDue(t *testing.T, server *Server, token, lineID string, quantity int, priority, dueDate string) string {
+	t.Helper()
+	body := bytes.NewBufferString(`{"customer":"ACME","lineId":"` + lineID + `","quantity":` + strconv.Itoa(quantity) + `,"priority":"` + priority + `","dueDate":"` + dueDate + `"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/orders", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("create order failed: %d %s", res.Code, res.Body.String())
+	}
+	var payload domain.Order
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode order response: %v", err)
+	}
+	return payload.ID
 }
 
 func createOrderWithPriorityAndDue(t *testing.T, server *Server, token, lineID, priority, dueDate string) string {

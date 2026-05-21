@@ -8,6 +8,9 @@ VALUES
     ('user-scheduler-d', 'scheduler-d', 'demo', 'scheduler', 'D')
 ON CONFLICT (id) DO NOTHING;
 
+DELETE FROM schedule_allocations WHERE order_id LIKE 'ORD-DEMO-%';
+DELETE FROM orders WHERE id LIKE 'ORD-DEMO-%';
+
 INSERT INTO orders (
     id,
     customer,
@@ -21,9 +24,13 @@ INSERT INTO orders (
     updated_at
 )
 VALUES
-    ('ORD-DEMO-1', 'TSMC Demo', 'A', 2500, 'high', '待排程', '2026-05-03', 'user-sales', NOW(), NOW()),
-    ('ORD-DEMO-2', 'ACME Silicon', 'A', 1800, 'low', '已排程', '2026-05-04', 'user-sales', NOW(), NOW()),
-    ('ORD-DEMO-3', 'Northstar Fabless', 'B', 2200, 'low', '待排程', '2026-05-05', 'user-sales', NOW(), NOW()),
-    ('ORD-DEMO-4', 'Orion Devices', 'C', 1250, 'high', '生產中', '2026-05-02', 'user-sales', NOW(), NOW()),
-    ('ORD-DEMO-5', 'Helio Sensors', 'D', 900, 'low', '待排程', '2026-05-06', 'user-sales', NOW(), NOW())
+    ('ORD-DEMO-1', 'TSMC', 'A', 2500, 'high', '待排程', '2026-06-04', 'user-sales', NOW(), NOW()),
+    ('ORD-DEMO-2', 'TSMC', 'A', 2500, 'high', '待排程', '2026-06-04', 'user-sales', NOW(), NOW()),
+    ('ORD-DEMO-3', 'TSMC', 'A', 2500, 'low', '待排程', '2026-06-05', 'user-sales', NOW(), NOW()),
+    ('ORD-DEMO-4', 'TSMC', 'A', 2500, 'low', '待排程', '2026-06-05', 'user-sales', NOW(), NOW()),
+    ('ORD-DEMO-5', 'TSMC', 'A', 2500, 'low', '待排程', '2026-06-05', 'user-sales', NOW(), NOW()),
+    ('ORD-DEMO-6', 'TSMC', 'A', 2500, 'low', '待排程', '2026-06-05', 'user-sales', NOW(), NOW()),
+    ('ORD-DEMO-7', 'TSMC', 'A', 2500, 'low', '待排程', '2026-06-05', 'user-sales', NOW(), NOW()),
+    ('ORD-DEMO-8', 'TSMC', 'A', 2500, 'low', '待排程', '2026-06-06', 'user-sales', NOW(), NOW()),
+    ('ORD-DEMO-9', 'TSMC', 'A', 2500, 'low', '待排程', '2026-06-06', 'user-sales', NOW(), NOW())
 ON CONFLICT (id) DO NOTHING;

@@ -764,7 +764,7 @@ func (s *PostgresStore) ScheduleCalendar(lineID, month string, claims auth.Claim
 	calendarStart := monthStart.AddDate(0, 0, -int(monthStart.Weekday()))
 	calendarEnd := calendarStart.AddDate(0, 0, 42)
 	rows, err := s.db.Query(`
-		SELECT a.order_id, o.customer, a.line_id, a.allocation_date, a.quantity, a.priority, COALESCE(a.status, o.status), a.locked, o.due_date
+		SELECT a.order_id, o.customer, a.line_id, a.allocation_date, a.quantity, CASE WHEN COALESCE(a.status, o.status) = '已完成' THEN o.quantity ELSE 0 END, a.priority, COALESCE(a.status, o.status), a.locked, o.due_date
 		FROM schedule_allocations a
 		JOIN orders o ON o.id = a.order_id
 		WHERE a.line_id = $1 AND a.allocation_date >= $2 AND a.allocation_date < $3
@@ -777,7 +777,7 @@ func (s *PostgresStore) ScheduleCalendar(lineID, month string, claims auth.Claim
 	allocations := []calendarAllocation{}
 	for rows.Next() {
 		var allocation calendarAllocation
-		if err := rows.Scan(&allocation.OrderID, &allocation.Customer, &allocation.LineID, &allocation.Date, &allocation.Quantity, &allocation.Priority, &allocation.Status, &allocation.Locked, &allocation.DueDate); err != nil {
+		if err := rows.Scan(&allocation.OrderID, &allocation.Customer, &allocation.LineID, &allocation.Date, &allocation.Quantity, &allocation.CompletedQuantity, &allocation.Priority, &allocation.Status, &allocation.Locked, &allocation.DueDate); err != nil {
 			return calendarResponse{}, err
 		}
 		allocations = append(allocations, allocation)
@@ -948,42 +948,126 @@ func (s *PostgresStore) ConfirmProduction(req productionConfirmRequest, claims a
 	if req.ProducedQuantity > allocation.Quantity {
 		return productionConfirmResponse{}, errors.New("producedQuantity cannot exceed scheduled allocation quantity")
 	}
-	completed := req.ProducedQuantity >= order.Quantity
+	now := time.Now().UTC()
+	result, err := scheduler.ConfirmProduction(order, req.ProducedQuantity, now)
+	if err != nil {
+		return productionConfirmResponse{}, err
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return productionConfirmResponse{}, err
 	}
 	defer tx.Rollback()
 	action := "production.confirm.partial"
-	if completed {
+	reason := ""
+	var remainder *domain.Order
+	if result.Completed {
 		action = "production.confirm.complete"
 		order.Status = domain.StatusCompleted
-		if _, err := tx.Exec("UPDATE orders SET status = '已完成', updated_at = NOW() WHERE id = $1", order.ID); err != nil {
+		order.UpdatedAt = now
+		if _, err := tx.Exec("UPDATE orders SET status = '已完成', updated_at = $2 WHERE id = $1", order.ID, now); err != nil {
 			return productionConfirmResponse{}, err
 		}
 	} else {
-		order.Quantity -= req.ProducedQuantity
-		order.Status = domain.StatusPending
-		if _, err := tx.Exec("UPDATE orders SET status = '待排程', quantity = $2, updated_at = NOW() WHERE id = $1", order.ID, order.Quantity); err != nil {
+		originalQuantity := order.Quantity
+		remainderValue := *result.Remainder
+		remainderID, err := s.nextRemainderOrderIDTx(tx, order.ID, order.SourceOrder != "")
+		if err != nil {
 			return productionConfirmResponse{}, err
 		}
+		remainderValue.ID = remainderID
+		remainderValue.CreatedAt = now
+		remainderValue.UpdatedAt = now
+		order.Quantity = req.ProducedQuantity
+		order.Status = domain.StatusCompleted
+		order.UpdatedAt = now
+		if _, err := tx.Exec("UPDATE orders SET status = '已完成', quantity = $2, updated_at = $3 WHERE id = $1", order.ID, order.Quantity, now); err != nil {
+			return productionConfirmResponse{}, err
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO orders (id, customer, line_id, quantity, priority, status, due_date, note, created_by, source_order, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
+		`, remainderValue.ID, remainderValue.Customer, remainderValue.LineID, remainderValue.Quantity, remainderValue.Priority, remainderValue.Status, remainderValue.DueDate, remainderValue.Note, remainderValue.CreatedBy, order.ID, now); err != nil {
+			return productionConfirmResponse{}, err
+		}
+		reason = "produced " + strconv.Itoa(req.ProducedQuantity) + " of " + strconv.Itoa(originalQuantity) + ", remainder " + remainderValue.ID + " quantity " + strconv.Itoa(remainderValue.Quantity) + " returned to pending"
+		remainder = &remainderValue
 	}
-	if _, err := tx.Exec("UPDATE schedule_allocations SET quantity = $3, locked = TRUE, status = '已完成' WHERE order_id = $1 AND allocation_date = $2", order.ID, productionDate, req.ProducedQuantity); err != nil {
+	if _, err := tx.Exec("UPDATE schedule_allocations SET locked = TRUE, status = '已完成' WHERE order_id = $1 AND allocation_date = $2", order.ID, productionDate); err != nil {
 		return productionConfirmResponse{}, err
+	}
+	if !result.Completed {
+		if _, err := tx.Exec("DELETE FROM schedule_allocations WHERE order_id = $1 AND allocation_date <> $2", order.ID, productionDate); err != nil {
+			return productionConfirmResponse{}, err
+		}
 	}
 	if _, err := tx.Exec("UPDATE production_lines SET schedule_revision = schedule_revision + 1 WHERE id = $1", order.LineID); err != nil {
 		return productionConfirmResponse{}, err
 	}
-	if _, err := insertAuditTx(tx, claims.Subject, action, order.ID, ""); err != nil {
+	if _, err := insertAuditTx(tx, claims.Subject, action, order.ID, reason); err != nil {
 		return productionConfirmResponse{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return productionConfirmResponse{}, err
 	}
-	if completed {
+	if result.Completed {
 		return productionConfirmResponse{Order: order}, nil
 	}
-	return productionConfirmResponse{Order: order, Remainder: &order}, nil
+	return productionConfirmResponse{Order: order, Remainder: remainder}, nil
+}
+
+func (s *PostgresStore) splitAllocationOrderIDsDB(allocations []scheduler.Allocation) ([]scheduler.Allocation, error) {
+	seen := map[string]int{}
+	reserved := map[string]bool{}
+	normalized := make([]scheduler.Allocation, 0, len(allocations))
+	for _, allocation := range allocations {
+		seen[allocation.OrderID]++
+		if seen[allocation.OrderID] == 1 {
+			normalized = append(normalized, allocation)
+			continue
+		}
+		source, err := s.order(allocation.OrderID)
+		if err != nil {
+			return nil, err
+		}
+		sourceID := allocation.OrderID
+		allocation.SourceOrderID = sourceID
+		var existsErr error
+		allocation.OrderID = nextRemainderOrderID(sourceID, source.SourceOrder != "", func(id string) bool {
+			if existsErr != nil {
+				return false
+			}
+			var exists bool
+			existsErr = s.db.QueryRow("SELECT EXISTS (SELECT 1 FROM orders WHERE id = $1)", id).Scan(&exists)
+			return existsErr != nil || exists || reserved[id]
+		})
+		if existsErr != nil {
+			return nil, existsErr
+		}
+		reserved[allocation.OrderID] = true
+		normalized = append(normalized, allocation)
+	}
+	return normalized, nil
+}
+
+func (s *PostgresStore) nextRemainderOrderIDTx(tx *sql.Tx, originalID string, incrementExistingSuffix bool) (string, error) {
+	candidate := ""
+	var err error
+	candidate = nextRemainderOrderID(originalID, incrementExistingSuffix, func(id string) bool {
+		if err != nil {
+			return false
+		}
+		var exists bool
+		err = tx.QueryRow("SELECT EXISTS (SELECT 1 FROM orders WHERE id = $1)", id).Scan(&exists)
+		if err != nil {
+			return false
+		}
+		return exists
+	})
+	if err != nil {
+		return "", err
+	}
+	return candidate, nil
 }
 
 func (s *PostgresStore) DeleteQueuedScheduleJob(id string) {
@@ -1304,6 +1388,10 @@ func (s *PostgresStore) previewFromDB(req scheduleRequest, claims auth.Claims) (
 		ForceReason:         req.Reason,
 		AllowLateCompletion: req.AllowLateCompletion,
 	})
+	if err != nil {
+		return scheduler.Result{}, previewFromDBResult{}, err
+	}
+	result.Allocations, err = s.splitAllocationOrderIDsDB(result.Allocations)
 	if err != nil {
 		return scheduler.Result{}, previewFromDBResult{}, err
 	}
