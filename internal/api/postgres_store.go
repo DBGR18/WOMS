@@ -948,7 +948,8 @@ func (s *PostgresStore) ConfirmProduction(req productionConfirmRequest, claims a
 	if req.ProducedQuantity > allocation.Quantity {
 		return productionConfirmResponse{}, errors.New("producedQuantity cannot exceed scheduled allocation quantity")
 	}
-	result, err := scheduler.ConfirmProduction(order, req.ProducedQuantity, time.Now().UTC())
+	now := time.Now().UTC()
+	result, err := scheduler.ConfirmProduction(order, req.ProducedQuantity, now)
 	if err != nil {
 		return productionConfirmResponse{}, err
 	}
@@ -963,12 +964,12 @@ func (s *PostgresStore) ConfirmProduction(req productionConfirmRequest, claims a
 	if result.Completed {
 		action = "production.confirm.complete"
 		order.Status = domain.StatusCompleted
-		if _, err := tx.Exec("UPDATE orders SET status = '已完成', updated_at = NOW() WHERE id = $1", order.ID); err != nil {
+		order.UpdatedAt = now
+		if _, err := tx.Exec("UPDATE orders SET status = '已完成', updated_at = $2 WHERE id = $1", order.ID, now); err != nil {
 			return productionConfirmResponse{}, err
 		}
 	} else {
 		originalQuantity := order.Quantity
-		now := time.Now().UTC()
 		remainderValue := *result.Remainder
 		remainderID, err := s.nextRemainderOrderIDTx(tx, order.ID, order.SourceOrder != "")
 		if err != nil {
@@ -979,6 +980,7 @@ func (s *PostgresStore) ConfirmProduction(req productionConfirmRequest, claims a
 		remainderValue.UpdatedAt = now
 		order.Quantity = req.ProducedQuantity
 		order.Status = domain.StatusCompleted
+		order.UpdatedAt = now
 		if _, err := tx.Exec("UPDATE orders SET status = '已完成', quantity = $2, updated_at = $3 WHERE id = $1", order.ID, order.Quantity, now); err != nil {
 			return productionConfirmResponse{}, err
 		}
