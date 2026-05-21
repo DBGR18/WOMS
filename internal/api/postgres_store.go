@@ -948,42 +948,87 @@ func (s *PostgresStore) ConfirmProduction(req productionConfirmRequest, claims a
 	if req.ProducedQuantity > allocation.Quantity {
 		return productionConfirmResponse{}, errors.New("producedQuantity cannot exceed scheduled allocation quantity")
 	}
-	completed := req.ProducedQuantity >= order.Quantity
+	result, err := scheduler.ConfirmProduction(order, req.ProducedQuantity, time.Now().UTC())
+	if err != nil {
+		return productionConfirmResponse{}, err
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return productionConfirmResponse{}, err
 	}
 	defer tx.Rollback()
 	action := "production.confirm.partial"
-	if completed {
+	reason := ""
+	var remainder *domain.Order
+	if result.Completed {
 		action = "production.confirm.complete"
 		order.Status = domain.StatusCompleted
 		if _, err := tx.Exec("UPDATE orders SET status = '已完成', updated_at = NOW() WHERE id = $1", order.ID); err != nil {
 			return productionConfirmResponse{}, err
 		}
 	} else {
-		order.Quantity -= req.ProducedQuantity
-		order.Status = domain.StatusPending
-		if _, err := tx.Exec("UPDATE orders SET status = '待排程', quantity = $2, updated_at = NOW() WHERE id = $1", order.ID, order.Quantity); err != nil {
+		originalQuantity := order.Quantity
+		now := time.Now().UTC()
+		remainderValue := *result.Remainder
+		remainderID, err := s.nextRemainderOrderIDTx(tx, order.ID, order.SourceOrder != "")
+		if err != nil {
 			return productionConfirmResponse{}, err
 		}
+		remainderValue.ID = remainderID
+		remainderValue.CreatedAt = now
+		remainderValue.UpdatedAt = now
+		order.Quantity = req.ProducedQuantity
+		order.Status = domain.StatusCompleted
+		if _, err := tx.Exec("UPDATE orders SET status = '已完成', quantity = $2, updated_at = $3 WHERE id = $1", order.ID, order.Quantity, now); err != nil {
+			return productionConfirmResponse{}, err
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO orders (id, customer, line_id, quantity, priority, status, due_date, note, created_by, source_order, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
+		`, remainderValue.ID, remainderValue.Customer, remainderValue.LineID, remainderValue.Quantity, remainderValue.Priority, remainderValue.Status, remainderValue.DueDate, remainderValue.Note, remainderValue.CreatedBy, order.ID, now); err != nil {
+			return productionConfirmResponse{}, err
+		}
+		reason = "produced " + strconv.Itoa(req.ProducedQuantity) + " of " + strconv.Itoa(originalQuantity) + ", remainder " + remainderValue.ID + " quantity " + strconv.Itoa(remainderValue.Quantity) + " returned to pending"
+		remainder = &remainderValue
 	}
-	if _, err := tx.Exec("UPDATE schedule_allocations SET quantity = $3, locked = TRUE, status = '已完成' WHERE order_id = $1 AND allocation_date = $2", order.ID, productionDate, req.ProducedQuantity); err != nil {
+	if _, err := tx.Exec("UPDATE schedule_allocations SET locked = TRUE, status = '已完成' WHERE order_id = $1 AND allocation_date = $2", order.ID, productionDate); err != nil {
 		return productionConfirmResponse{}, err
+	}
+	if !result.Completed {
+		if _, err := tx.Exec("DELETE FROM schedule_allocations WHERE order_id = $1 AND allocation_date <> $2", order.ID, productionDate); err != nil {
+			return productionConfirmResponse{}, err
+		}
 	}
 	if _, err := tx.Exec("UPDATE production_lines SET schedule_revision = schedule_revision + 1 WHERE id = $1", order.LineID); err != nil {
 		return productionConfirmResponse{}, err
 	}
-	if _, err := insertAuditTx(tx, claims.Subject, action, order.ID, ""); err != nil {
+	if _, err := insertAuditTx(tx, claims.Subject, action, order.ID, reason); err != nil {
 		return productionConfirmResponse{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return productionConfirmResponse{}, err
 	}
-	if completed {
+	if result.Completed {
 		return productionConfirmResponse{Order: order}, nil
 	}
-	return productionConfirmResponse{Order: order, Remainder: &order}, nil
+	return productionConfirmResponse{Order: order, Remainder: remainder}, nil
+}
+
+func (s *PostgresStore) nextRemainderOrderIDTx(tx *sql.Tx, originalID string, incrementExistingSuffix bool) (string, error) {
+	candidate := ""
+	var err error
+	candidate = nextRemainderOrderID(originalID, incrementExistingSuffix, func(id string) bool {
+		if err != nil {
+			return true
+		}
+		var exists bool
+		err = tx.QueryRow("SELECT EXISTS (SELECT 1 FROM orders WHERE id = $1)", id).Scan(&exists)
+		return err != nil || exists
+	})
+	if err != nil {
+		return "", err
+	}
+	return candidate, nil
 }
 
 func (s *PostgresStore) DeleteQueuedScheduleJob(id string) {
