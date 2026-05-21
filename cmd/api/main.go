@@ -18,6 +18,7 @@ func main() {
 	jwtSecret := env("JWT_SECRET", "change-me-in-production")
 	dependencyTimeout := envDuration("API_DEPENDENCY_RETRY_TIMEOUT_MS", 2*time.Minute)
 	dependencyInterval := envDuration("API_DEPENDENCY_RETRY_INTERVAL_MS", 2*time.Second)
+	redisAddr := env("REDIS_ADDR", "")
 	var store api.Store
 	if env("API_STORE", "memory") == "postgres" {
 		ctx, cancel := context.WithTimeout(context.Background(), dependencyTimeout)
@@ -54,10 +55,31 @@ func main() {
 		publisher = api.NewKafkaScheduleJobPublisher(brokers, env("KAFKA_SCHEDULE_TOPIC", "woms.schedule.jobs"))
 		defer publisher.Close()
 	}
+	tokenSessions := api.TokenSessionStore(api.NoopTokenSessionStore{})
+	if env("AUTH_SESSION_STORE", "") == "redis" {
+		if redisAddr == "" {
+			log.Fatal("AUTH_SESSION_STORE=redis requires REDIS_ADDR")
+		}
+		redisSessions := api.NewRedisTokenSessionStore(redisAddr)
+		ctx, cancel := context.WithTimeout(context.Background(), dependencyTimeout)
+		if err := startup.RetryDependency(ctx, "redis auth session store", dependencyInterval, log.Printf, func(ctx context.Context) error {
+			return redisSessions.Ping(ctx)
+		}); err != nil {
+			cancel()
+			log.Fatalf("redis auth session store failed: %v", err)
+		}
+		cancel()
+		tokenSessions = redisSessions
+		defer tokenSessions.Close()
+	}
 
 	server := &http.Server{
-		Addr:              addr,
-		Handler:           api.NewServerWithPublisher(jwtSecret, store, publisher),
+		Addr: addr,
+		Handler: api.NewServerWithPublisherAndConfig(jwtSecret, store, publisher, api.ServerConfig{
+			TokenSessions:     tokenSessions,
+			CORSAllowedOrigin: env("CORS_ALLOWED_ORIGIN", "*"),
+			AuthMode:          env("AUTH_MODE", "local"),
+		}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

@@ -4,13 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"log"
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/d11nn/woms/internal/domain"
+	womslock "github.com/d11nn/woms/internal/lock"
 	"github.com/d11nn/woms/internal/scheduler"
 	"github.com/d11nn/woms/internal/startup"
 	_ "github.com/lib/pq"
@@ -23,8 +26,12 @@ func main() {
 	topic := env("KAFKA_SCHEDULE_TOPIC", "woms.schedule.jobs")
 	group := env("KAFKA_CONSUMER_GROUP", "woms-scheduler-workers")
 	databaseURL := env("DATABASE_URL", "")
+	redisAddr := env("REDIS_ADDR", "")
 	minJobDuration := envDuration("WORKER_MIN_JOB_DURATION_MS", 0)
 	maxRetries := envInt("WORKER_MAX_RETRIES", 3)
+	lockTTL := envDuration("WORKER_LOCK_TTL_MS", 15*time.Second)
+	lockRenewInterval := envDuration("WORKER_LOCK_RENEW_INTERVAL_MS", 5*time.Second)
+	lockTimeout := envDuration("WORKER_LOCK_TIMEOUT_MS", 10*time.Second)
 	backfillInterval := envDuration("WORKER_BACKFILL_INTERVAL_MS", 5*time.Second)
 	dependencyTimeout := envDuration("WORKER_DEPENDENCY_RETRY_TIMEOUT_MS", 2*time.Minute)
 	dependencyInterval := envDuration("WORKER_DEPENDENCY_RETRY_INTERVAL_MS", 2*time.Second)
@@ -40,13 +47,33 @@ func main() {
 		startOffset = kafka.LastOffset
 	}
 	var db *sql.DB
+	var lockProvider womslock.Provider
 	if databaseURL != "" {
+		if err := validateLockConfig(lockTTL, lockRenewInterval, lockTimeout); err != nil {
+			log.Fatalf("invalid Redis lock configuration: %v", err)
+		}
+		if backfillInterval <= 0 {
+			log.Fatal("WORKER_BACKFILL_INTERVAL_MS must be greater than zero when DATABASE_URL is set")
+		}
+		if redisAddr == "" {
+			log.Fatal("REDIS_ADDR is required when DATABASE_URL is set; scheduler-worker refuses to run without Redis line locks")
+		}
 		var err error
+		redisLocks := womslock.NewRedisProvider(redisAddr)
+		ctx, cancel := context.WithTimeout(context.Background(), dependencyTimeout)
+		err = startup.RetryDependency(ctx, "redis line lock", dependencyInterval, log.Printf, func(ctx context.Context) error {
+			return redisLocks.Ping(ctx)
+		})
+		cancel()
+		if err != nil {
+			log.Fatalf("redis line lock failed: %v", err)
+		}
+		lockProvider = redisLocks
 		db, err = sql.Open("postgres", databaseURL)
 		if err != nil {
 			log.Fatalf("postgres open failed: %v", err)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), dependencyTimeout)
+		ctx, cancel = context.WithTimeout(context.Background(), dependencyTimeout)
 		err = startup.RetryDependency(ctx, "postgres", dependencyInterval, log.Printf, func(ctx context.Context) error {
 			return db.PingContext(ctx)
 		})
@@ -55,7 +82,7 @@ func main() {
 			log.Fatalf("postgres ping failed: %v", err)
 		}
 		defer db.Close()
-		if err := backfillQueuedJobs(context.Background(), db, maxRetries); err != nil {
+		if err := backfillQueuedJobs(context.Background(), db, lockProvider, maxRetries, lockTTL, lockRenewInterval, lockTimeout); err != nil {
 			log.Printf("scheduler backfill failed: %v", err)
 		}
 	}
@@ -84,7 +111,7 @@ func main() {
 			ticker := time.NewTicker(backfillInterval)
 			defer ticker.Stop()
 			for range ticker.C {
-				if err := backfillQueuedJobs(context.Background(), db, maxRetries); err != nil {
+				if err := backfillQueuedJobs(context.Background(), db, lockProvider, maxRetries, lockTTL, lockRenewInterval, lockTimeout); err != nil {
 					log.Printf("scheduler backfill failed: %v", err)
 				}
 			}
@@ -104,7 +131,7 @@ func main() {
 			time.Sleep(minJobDuration)
 		}
 		if db != nil {
-			if err := processDBJob(context.Background(), db, message.Value, maxRetries); err != nil {
+			if err := processDBJob(context.Background(), db, lockProvider, message.Value, maxRetries, lockTTL, lockRenewInterval, lockTimeout); err != nil {
 				log.Printf("scheduler job db execution failed key=%s error=%v", string(message.Key), err)
 				time.Sleep(2 * time.Second)
 				continue
@@ -118,7 +145,7 @@ func main() {
 	}
 }
 
-func processDBJob(ctx context.Context, db *sql.DB, payload []byte, maxRetries int) error {
+func processDBJob(ctx context.Context, db *sql.DB, lockProvider womslock.Provider, payload []byte, maxRetries int, lockTTL, lockRenewInterval, lockTimeout time.Duration) error {
 	var job domain.ScheduleJob
 	if err := json.Unmarshal(payload, &job); err != nil {
 		return err
@@ -126,17 +153,80 @@ func processDBJob(ctx context.Context, db *sql.DB, payload []byte, maxRetries in
 	if job.ID == "" || job.LineID == "" {
 		return nil
 	}
+	if lockProvider == nil {
+		if err := markJobFailed(ctx, db, job.ID, "Redis 排程鎖未設定。"); err != nil {
+			return err
+		}
+		return nil
+	}
+	lockCtx, cancel := context.WithTimeout(ctx, lockTimeout)
+	defer cancel()
+	lineLock, err := acquireLineLock(lockCtx, lockProvider, scheduleLineLockKey(job.LineID), lockTTL)
+	if err != nil {
+		message := "Redis 排程鎖取得失敗，等待重試：" + err.Error()
+		if lockCtx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			message = "同產線排程鎖取得逾時，等待重試。"
+		}
+		if retryErr := markJobRetry(ctx, db, job.ID, message); retryErr != nil {
+			return retryErr
+		}
+		return nil
+	}
+	defer func() {
+		if err := lineLock.Release(context.Background()); err != nil {
+			log.Printf("failed to release line lock for job %s on line %s: %v", job.ID, job.LineID, err)
+		}
+	}()
+	runCtx, stopRenewal := startLockRenewal(ctx, lineLock, lockTTL, lockRenewInterval)
+	defer stopRenewal()
+	return processDBJobLocked(runCtx, db, job, maxRetries)
+}
+
+func validateLockConfig(lockTTL, lockRenewInterval, lockTimeout time.Duration) error {
+	if lockTTL <= 0 {
+		return errors.New("WORKER_LOCK_TTL_MS must be greater than zero")
+	}
+	if lockTimeout <= 0 {
+		return errors.New("WORKER_LOCK_TIMEOUT_MS must be greater than zero")
+	}
+	if lockRenewInterval <= 0 || lockRenewInterval >= lockTTL {
+		return errors.New("WORKER_LOCK_RENEW_INTERVAL_MS must be greater than zero and less than WORKER_LOCK_TTL_MS")
+	}
+	return nil
+}
+
+func acquireLineLock(ctx context.Context, provider womslock.Provider, key string, ttl time.Duration) (womslock.Lock, error) {
+	retry := 200 * time.Millisecond
+	for {
+		lineLock, err := provider.Acquire(ctx, key, ttl)
+		if err == nil {
+			return lineLock, nil
+		}
+		if !errors.Is(err, womslock.ErrNotAcquired) {
+			return nil, err
+		}
+		timer := time.NewTimer(retry)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func processDBJobLocked(ctx context.Context, db *sql.DB, job domain.ScheduleJob, maxRetries int) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtext($1))", job.LineID); err != nil {
-		return err
-	}
 	var status domain.ScheduleJobStatus
 	if err := tx.QueryRowContext(ctx, "SELECT status FROM schedule_jobs WHERE id = $1 FOR UPDATE", job.ID).Scan(&status); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return tx.Commit()
+		}
 		return err
 	}
 	if status == domain.JobCancelled {
@@ -201,6 +291,55 @@ func processDBJob(ctx context.Context, db *sql.DB, payload []byte, maxRetries in
 		}
 	}
 	return tx.Commit()
+}
+
+func startLockRenewal(ctx context.Context, lineLock womslock.Lock, ttl, interval time.Duration) (context.Context, context.CancelFunc) {
+	runCtx, cancel := context.WithCancel(ctx)
+	if interval <= 0 {
+		return runCtx, cancel
+	}
+	var stopped atomic.Bool
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-runCtx.Done():
+				return
+			case <-ticker.C:
+				if stopped.Load() {
+					return
+				}
+				if err := lineLock.Refresh(runCtx, ttl); err != nil {
+					log.Printf("redis line lock renewal failed: %v", err)
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return runCtx, func() {
+		stopped.Store(true)
+		cancel()
+	}
+}
+
+func markJobRetry(ctx context.Context, db *sql.DB, jobID, message string) error {
+	_, err := db.ExecContext(ctx, `
+		UPDATE schedule_jobs
+		SET status = 'queued', message = $2, updated_at = NOW()
+		WHERE id = $1 AND status = 'queued'
+	`, jobID, message)
+	return err
+}
+
+func markJobFailed(ctx context.Context, db *sql.DB, jobID, message string) error {
+	_, err := db.ExecContext(ctx, `
+		UPDATE schedule_jobs
+		SET status = 'failed', message = $2, completed_at = NOW(), updated_at = NOW()
+		WHERE id = $1
+	`, jobID, message)
+	return err
 }
 
 func insertWorkerAuditTx(ctx context.Context, tx *sql.Tx, jobID, action, reason string) error {
@@ -337,7 +476,7 @@ func persistPreviewAllocations(ctx context.Context, tx *sql.Tx, job domain.Sched
 	return err
 }
 
-func backfillQueuedJobs(ctx context.Context, db *sql.DB, maxRetries int) error {
+func backfillQueuedJobs(ctx context.Context, db *sql.DB, lockProvider womslock.Provider, maxRetries int, lockTTL, lockRenewInterval, lockTimeout time.Duration) error {
 	const backfillBatchSize = 100
 
 	var (
@@ -401,7 +540,7 @@ func backfillQueuedJobs(ctx context.Context, db *sql.DB, maxRetries int) error {
 				rows.Close()
 				return err
 			}
-			if err := processDBJob(ctx, db, payload, maxRetries); err != nil {
+			if err := processDBJob(ctx, db, lockProvider, payload, maxRetries, lockTTL, lockRenewInterval, lockTimeout); err != nil {
 				log.Printf("scheduler backfill job failed id=%s error=%v", job.ID, err)
 			}
 
@@ -468,6 +607,10 @@ func contains(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func scheduleLineLockKey(lineID string) string {
+	return "woms:locks:schedule-line:" + lineID
 }
 
 func truncateDate(value time.Time) time.Time {

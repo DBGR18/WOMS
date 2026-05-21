@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/d11nn/woms/internal/auth"
 	"github.com/d11nn/woms/internal/domain"
 )
 
@@ -51,8 +52,79 @@ func TestAPIErrorMessagesAreZhTW(t *testing.T) {
 	}
 }
 
-func TestIngressAuthAcceptsValidToken(t *testing.T) {
+func TestSecurityHeadersUseConfiguredCORSOrigin(t *testing.T) {
+	server := NewServerWithPublisherAndConfig("secret", NewMemoryStore(), NoopScheduleJobPublisher{}, ServerConfig{
+		CORSAllowedOrigin: "https://woms.example.com",
+	})
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	res := httptest.NewRecorder()
+
+	server.ServeHTTP(res, req)
+
+	if got := res.Header().Get("Access-Control-Allow-Origin"); got != "https://woms.example.com" {
+		t.Fatalf("expected configured CORS origin, got %q", got)
+	}
+	if got := res.Header().Get("X-Frame-Options"); got != "DENY" {
+		t.Fatalf("expected X-Frame-Options DENY, got %q", got)
+	}
+}
+
+func TestBusinessAPIsRequireBearerToken(t *testing.T) {
 	server := NewServer("secret", NewMemoryStore())
+	cases := []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodGet, "/api/orders", ""},
+		{http.MethodPost, "/api/orders", `{"customer":"A","lineId":"A","quantity":100,"priority":"low","dueDate":"2026-05-06"}`},
+		{http.MethodGet, "/api/lines", ""},
+		{http.MethodGet, "/api/users", ""},
+		{http.MethodPost, "/api/schedules/preview", `{"lineId":"A","startDate":"2026-05-01"}`},
+		{http.MethodGet, "/api/schedules/calendar?lineId=A&month=2026-05", ""},
+		{http.MethodPost, "/api/production/start", `{"orderId":"ORD-0000001"}`},
+	}
+	for _, tt := range cases {
+		req := httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body))
+		req.Header.Set("X-User-Role", "admin")
+		res := httptest.NewRecorder()
+		server.ServeHTTP(res, req)
+		if res.Code != http.StatusUnauthorized {
+			t.Fatalf("%s %s expected 401, got %d body=%s", tt.method, tt.path, res.Code, res.Body.String())
+		}
+	}
+}
+
+func TestEdgeModeAcceptsSignedTokenButRejectsPlainHeaders(t *testing.T) {
+	server := NewServerWithPublisherAndConfig("edge-secret", NewMemoryStore(), NoopScheduleJobPublisher{}, ServerConfig{
+		AuthMode: "edge",
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/orders", nil)
+	req.Header.Set("X-User-ID", "user-admin")
+	req.Header.Set("X-User-Role", "admin")
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("expected unsigned edge headers to fail, got %d %s", res.Code, res.Body.String())
+	}
+
+	token, err := auth.CreateToken("edge-secret", auth.Claims{Subject: "user-sales", Role: domain.RoleSales}, time.Hour)
+	if err != nil {
+		t.Fatalf("create edge token: %v", err)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/orders", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected signed edge token to pass, got %d %s", res.Code, res.Body.String())
+	}
+}
+
+func TestIngressAuthAcceptsValidToken(t *testing.T) {
+	server := NewServerWithPublisherAndConfig("secret", NewMemoryStore(), NoopScheduleJobPublisher{}, ServerConfig{
+		TokenSessions: NewMemoryTokenSessionStore(),
+	})
 	token := login(t, server, "sales", "demo")
 	req := httptest.NewRequest(http.MethodGet, "/internal/auth/verify", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -62,6 +134,54 @@ func TestIngressAuthAcceptsValidToken(t *testing.T) {
 
 	if res.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d body=%s", res.Code, res.Body.String())
+	}
+	if got := res.Header().Get("X-User-ID"); got != "user-sales" {
+		t.Fatalf("expected ingress auth user id header, got %q", got)
+	}
+	if got := res.Header().Get("X-User-Role"); got != string(domain.RoleSales) {
+		t.Fatalf("expected ingress auth role header, got %q", got)
+	}
+}
+
+func TestLogoutRevokesTokenSession(t *testing.T) {
+	sessions := NewMemoryTokenSessionStore()
+	server := NewServerWithPublisherAndConfig("secret", NewMemoryStore(), NoopScheduleJobPublisher{}, ServerConfig{
+		TokenSessions: sessions,
+	})
+	token := login(t, server, "sales", "demo")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected logout 200, got %d body=%s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/internal/auth/verify", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("expected revoked token to fail verify, got %d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestSessionStoreFailureReturnsServiceUnavailable(t *testing.T) {
+	server := NewServerWithPublisherAndConfig("secret", NewMemoryStore(), NoopScheduleJobPublisher{}, ServerConfig{
+		TokenSessions: failingVerifyTokenSessionStore{},
+	})
+	token := login(t, server, "sales", "demo")
+	req := httptest.NewRequest(http.MethodGet, "/api/orders", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected session store failure to return 503, got %d body=%s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "登入狀態服務暫時無法使用") {
+		t.Fatalf("expected session store unavailable response, got %s", res.Body.String())
 	}
 }
 
@@ -211,10 +331,10 @@ func TestHPAPeakDemoIsAdminOnlyAndCreatesWorkload(t *testing.T) {
 	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode hpa demo response: %v", err)
 	}
-	if payload.Summary.LineCount != 200 || payload.Summary.OrderCount != 1000 || payload.Summary.JobCount != 200 {
+	if payload.Summary.LineCount != 200 || payload.Summary.OrderCount != 1000 || payload.Summary.JobCount != 400 {
 		t.Fatalf("unexpected hpa demo summary: %+v", payload.Summary)
 	}
-	if payload.Summary.Statuses[string(domain.JobQueued)] != 200 {
+	if payload.Summary.Statuses[string(domain.JobQueued)] != 400 {
 		t.Fatalf("expected queued jobs, got %+v", payload.Summary.Statuses)
 	}
 
@@ -228,8 +348,35 @@ func TestHPAPeakDemoIsAdminOnlyAndCreatesWorkload(t *testing.T) {
 	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode clear response: %v", err)
 	}
-	if payload.Summary.LineCount != 0 || payload.Summary.OrderCount != 0 || payload.Summary.JobCount != 200 || payload.Summary.Statuses[string(domain.JobCancelled)] != 200 {
+	if payload.Summary.LineCount != 0 || payload.Summary.OrderCount != 0 || payload.Summary.JobCount != 400 || payload.Summary.Statuses[string(domain.JobCancelled)] != 400 {
 		t.Fatalf("expected cleared hpa demo summary, got %+v", payload.Summary)
+	}
+}
+
+func TestHPAPeakDemoPublishFailureCancelsWorkload(t *testing.T) {
+	store := NewMemoryStore()
+	server := NewServerWithPublisher("secret", store, failingPublisher{})
+	admin := login(t, server, "admin", "demo")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/demo/hpa-peak", nil)
+	req.Header.Set("Authorization", "Bearer "+admin)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusBadGateway {
+		t.Fatalf("expected publish failure, got %d %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "排程尖峰任務送出失敗") {
+		t.Fatalf("expected zh-TW publish error, got %s", res.Body.String())
+	}
+	summary := store.HPAPeakSummary()
+	if summary.Statuses[string(domain.JobQueued)] != 0 {
+		t.Fatalf("publish failure should not leave queued jobs, got %+v", summary.Statuses)
+	}
+	if summary.Statuses[string(domain.JobCancelled)] != 400 {
+		t.Fatalf("expected failed demo workload to be cancelled, got %+v", summary.Statuses)
+	}
+	if summary.OrderCount != 0 || summary.LineCount != 0 {
+		t.Fatalf("expected failed demo workload orders and lines to be cleared, got %+v", summary)
 	}
 }
 
@@ -376,6 +523,136 @@ func TestOnlyAdminCanAssignUsers(t *testing.T) {
 
 	if res.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestAdminCanCreateResetAndDeleteUser(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	admin := login(t, server, "admin", "demo")
+
+	body := bytes.NewBufferString(`{"username":"new-sales","password":"temporary","role":"sales"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/users", body)
+	req.Header.Set("Authorization", "Bearer "+admin)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("expected create user 201, got %d %s", res.Code, res.Body.String())
+	}
+	if strings.Contains(res.Body.String(), "PasswordHash") || strings.Contains(res.Body.String(), "temporary") {
+		t.Fatalf("create user response leaked password material: %s", res.Body.String())
+	}
+
+	newSales := login(t, server, "new-sales", "temporary")
+	body = bytes.NewBufferString(`{"customer":"Class Demo","lineId":"A","quantity":100,"priority":"low","dueDate":"2026-05-06"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/orders", body)
+	req.Header.Set("Authorization", "Bearer "+newSales)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("expected new sales user to create order, got %d %s", res.Code, res.Body.String())
+	}
+
+	body = bytes.NewBufferString(`{"username":"new-sales","password":"rotated"}`)
+	req = httptest.NewRequest(http.MethodPatch, "/api/users/password", body)
+	req.Header.Set("Authorization", "Bearer "+admin)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected reset password 200, got %d %s", res.Code, res.Body.String())
+	}
+	_ = login(t, server, "new-sales", "rotated")
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/users/new-sales", nil)
+	req.Header.Set("Authorization", "Bearer "+admin)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected delete user 200, got %d %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), `"disabled":true`) || strings.Contains(res.Body.String(), `"deleted":true`) {
+		t.Fatalf("expected referenced user to be disabled, got %s", res.Body.String())
+	}
+
+	body = bytes.NewBufferString(`{"username":"new-sales","password":"rotated"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/auth/login", body)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("expected deleted/disabled user login to fail, got %d %s", res.Code, res.Body.String())
+	}
+}
+
+func TestAdminDeleteUnreferencedUserReportsDeleted(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	admin := login(t, server, "admin", "demo")
+
+	body := bytes.NewBufferString(`{"username":"unused-sales","password":"temporary","role":"sales"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/users", body)
+	req.Header.Set("Authorization", "Bearer "+admin)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("expected create user 201, got %d %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/users/unused-sales", nil)
+	req.Header.Set("Authorization", "Bearer "+admin)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected delete user 200, got %d %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), `"deleted":true`) || strings.Contains(res.Body.String(), `"disabled":true`) {
+		t.Fatalf("expected unreferenced user to be deleted, got %s", res.Body.String())
+	}
+}
+
+func TestAdminSelfDeleteDisablesAccount(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	admin := login(t, server, "admin", "demo")
+
+	body := bytes.NewBufferString(`{"username":"temporary-admin","password":"temporary","role":"admin"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/users", body)
+	req.Header.Set("Authorization", "Bearer "+admin)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("expected create admin 201, got %d %s", res.Code, res.Body.String())
+	}
+
+	self := login(t, server, "temporary-admin", "temporary")
+	req = httptest.NewRequest(http.MethodDelete, "/api/users/temporary-admin", nil)
+	req.Header.Set("Authorization", "Bearer "+self)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected self delete 200, got %d %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), `"disabled":true`) || strings.Contains(res.Body.String(), `"deleted":true`) {
+		t.Fatalf("expected self delete to disable account, got %s", res.Body.String())
+	}
+}
+
+func TestCreateUserRequiresAdminAndSchedulerLine(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	sales := login(t, server, "sales", "demo")
+	body := bytes.NewBufferString(`{"username":"new-scheduler","password":"temporary","role":"scheduler","lineId":"A"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/users", body)
+	req.Header.Set("Authorization", "Bearer "+sales)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("expected non-admin create user 403, got %d %s", res.Code, res.Body.String())
+	}
+
+	admin := login(t, server, "admin", "demo")
+	body = bytes.NewBufferString(`{"username":"new-scheduler","password":"temporary","role":"scheduler"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/users", body)
+	req.Header.Set("Authorization", "Bearer "+admin)
+	res = httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("expected scheduler without line to fail, got %d %s", res.Code, res.Body.String())
 	}
 }
 
@@ -1548,4 +1825,12 @@ func (failingPublisher) PublishScheduleJob(context.Context, domain.ScheduleJob) 
 
 func (failingPublisher) Close() error {
 	return nil
+}
+
+type failingVerifyTokenSessionStore struct {
+	NoopTokenSessionStore
+}
+
+func (failingVerifyTokenSessionStore) Verify(context.Context, string, auth.Claims) error {
+	return errors.New("redis unavailable")
 }

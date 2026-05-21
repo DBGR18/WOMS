@@ -54,18 +54,18 @@ func (s *PostgresStore) Close() error {
 func (s *PostgresStore) Authenticate(username, password string) (domain.User, bool) {
 	var user domain.User
 	err := s.db.QueryRow(`
-		SELECT id, username, password_hash, role, COALESCE(line_id, '')
+		SELECT id, username, password_hash, role, COALESCE(line_id, ''), disabled
 		FROM users
-		WHERE username = $1
-	`, username).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.LineID)
-	if err != nil || password == "" || password != user.PasswordHash {
+		WHERE username = $1 AND disabled = FALSE
+	`, username).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.LineID, &user.Disabled)
+	if err != nil || !auth.VerifyPassword(user.PasswordHash, password) {
 		return domain.User{}, false
 	}
 	return user, true
 }
 
 func (s *PostgresStore) ListUsers() []domain.User {
-	rows, err := s.db.Query("SELECT id, username, password_hash, role, COALESCE(line_id, '') FROM users ORDER BY username")
+	rows, err := s.db.Query("SELECT id, username, password_hash, role, COALESCE(line_id, ''), disabled FROM users ORDER BY username")
 	if err != nil {
 		return s.MemoryStore.ListUsers()
 	}
@@ -73,11 +73,55 @@ func (s *PostgresStore) ListUsers() []domain.User {
 	users := []domain.User{}
 	for rows.Next() {
 		var user domain.User
-		if err := rows.Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.LineID); err == nil {
+		if err := rows.Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.LineID, &user.Disabled); err == nil {
 			users = append(users, user)
 		}
 	}
 	return users
+}
+
+func (s *PostgresStore) CreateUser(req createUserRequest, actorID string) (domain.User, error) {
+	username := strings.TrimSpace(req.Username)
+	if err := validateUsername(username); err != nil {
+		return domain.User{}, err
+	}
+	lines := map[string]domain.ProductionLine{}
+	for _, line := range s.ListLines() {
+		lines[line.ID] = line
+	}
+	if err := validateUserRole(req.Role, req.LineID, lines); err != nil {
+		return domain.User{}, err
+	}
+	if req.Role != domain.RoleScheduler {
+		req.LineID = ""
+	}
+	passwordHash, err := auth.HashPassword(req.Password)
+	if err != nil {
+		return domain.User{}, err
+	}
+	user := domain.User{
+		ID:           "user-" + username,
+		Username:     username,
+		PasswordHash: passwordHash,
+		Role:         req.Role,
+		LineID:       req.LineID,
+	}
+	err = s.db.QueryRow(`
+		INSERT INTO users (id, username, password_hash, role, line_id, disabled)
+		VALUES ($1, $2, $3, $4, NULLIF($5, ''), FALSE)
+		RETURNING id, username, password_hash, role, COALESCE(line_id, ''), disabled
+	`, user.ID, user.Username, user.PasswordHash, user.Role, user.LineID).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.LineID, &user.Disabled)
+	if err != nil {
+		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "unique") {
+			return domain.User{}, errors.New("username already exists")
+		}
+		return domain.User{}, err
+	}
+	_, _ = s.db.Exec(`
+		INSERT INTO audit_logs (id, actor_id, action, resource, reason, created_at)
+		VALUES ($1, $2, 'user.create', $3, $4, NOW())
+	`, auditID("AUD-USER-"+user.ID), actorID, user.ID, string(req.Role)+" "+req.LineID)
+	return user, nil
 }
 
 func (s *PostgresStore) ListLines() []domain.ProductionLine {
@@ -459,8 +503,8 @@ func (s *PostgresStore) AssignUser(req assignUserRequest, actorID string) (domai
 	err := s.db.QueryRow(`
 		UPDATE users SET role = $2, line_id = NULLIF($3, '')
 		WHERE username = $1
-		RETURNING id, username, password_hash, role, COALESCE(line_id, '')
-	`, req.Username, req.Role, req.LineID).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.LineID)
+		RETURNING id, username, password_hash, role, COALESCE(line_id, ''), disabled
+	`, req.Username, req.Role, req.LineID).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.LineID, &user.Disabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.User{}, errors.New("user not found")
 	}
@@ -471,6 +515,82 @@ func (s *PostgresStore) AssignUser(req assignUserRequest, actorID string) (domai
 		INSERT INTO audit_logs (id, actor_id, action, resource, reason, created_at)
 		VALUES ($1, $2, 'user.assign', $3, $4, NOW())
 	`, auditID("AUD-USER-"+user.ID), actorID, user.ID, string(req.Role)+" "+req.LineID)
+	return user, nil
+}
+
+func (s *PostgresStore) ResetUserPassword(req resetUserPasswordRequest, actorID string) (domain.User, error) {
+	passwordHash, err := auth.HashPassword(req.Password)
+	if err != nil {
+		return domain.User{}, err
+	}
+	var user domain.User
+	err = s.db.QueryRow(`
+		UPDATE users SET password_hash = $2
+		WHERE username = $1
+		RETURNING id, username, password_hash, role, COALESCE(line_id, ''), disabled
+	`, strings.TrimSpace(req.Username), passwordHash).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.LineID, &user.Disabled)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.User{}, errors.New("user not found")
+	}
+	if err != nil {
+		return domain.User{}, err
+	}
+	_, _ = s.db.Exec(`
+		INSERT INTO audit_logs (id, actor_id, action, resource, reason, created_at)
+		VALUES ($1, $2, 'user.reset_password', $3, '', NOW())
+	`, auditID("AUD-USER-"+user.ID), actorID, user.ID)
+	return user, nil
+}
+
+func (s *PostgresStore) DeleteUser(username, actorID string) (domain.User, error) {
+	username = strings.TrimSpace(username)
+	var user domain.User
+	err := s.db.QueryRow(`
+		SELECT id, username, password_hash, role, COALESCE(line_id, ''), disabled
+		FROM users WHERE username = $1
+	`, username).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.LineID, &user.Disabled)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.User{}, errors.New("user not found")
+	}
+	if err != nil {
+		return domain.User{}, err
+	}
+	var references int
+	if err := s.db.QueryRow(`
+		SELECT
+			(SELECT COUNT(*) FROM orders WHERE created_by = $1 OR rejected_by = $1) +
+			(SELECT COUNT(*) FROM audit_logs WHERE actor_id = $1) +
+			(SELECT COUNT(*) FROM schedule_previews WHERE actor_id = $1)
+	`, user.ID).Scan(&references); err != nil {
+		return domain.User{}, err
+	}
+	if references == 0 && actorID != user.ID {
+		if _, err := s.db.Exec(`
+			INSERT INTO audit_logs (id, actor_id, action, resource, reason, created_at)
+			VALUES ($1, $2, 'user.delete', $3, '', NOW())
+		`, auditID("AUD-USER-"+user.ID), actorID, user.ID); err != nil {
+			return domain.User{}, err
+		}
+		if _, err := s.db.Exec("DELETE FROM users WHERE id = $1", user.ID); err != nil {
+			return domain.User{}, err
+		}
+		user.Disabled = false
+		user.Deleted = true
+		return user, nil
+	}
+	err = s.db.QueryRow(`
+		UPDATE users SET disabled = TRUE
+		WHERE id = $1
+		RETURNING id, username, password_hash, role, COALESCE(line_id, ''), disabled
+	`, user.ID).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.LineID, &user.Disabled)
+	if err != nil {
+		return domain.User{}, err
+	}
+	user.Deleted = false
+	_, _ = s.db.Exec(`
+		INSERT INTO audit_logs (id, actor_id, action, resource, reason, created_at)
+		VALUES ($1, $2, 'user.disable', $3, '', NOW())
+	`, auditID("AUD-USER-"+user.ID), actorID, user.ID)
 	return user, nil
 }
 
@@ -904,19 +1024,21 @@ func (s *PostgresStore) CreateHPAPeakDemo(claims auth.Claims) (hpaPeakSummary, e
 			}
 		}
 
-		jobID := "HPA-JOB-" + lineID
-		orderJSON, _ := json.Marshal(orderIDs)
-		if _, err := tx.Exec(`
-			INSERT INTO schedule_jobs (id, line_id, status, message, source, order_ids, created_at, updated_at)
-			VALUES ($1, $2, 'queued', '多產線排程尖峰任務已送入背景佇列。', $3, $4::jsonb, $5, $5)
-		`, jobID, lineID, hpaDemoSource, string(orderJSON), now); err != nil {
-			return hpaPeakSummary{}, err
-		}
-		if _, err := tx.Exec(`
-			INSERT INTO audit_logs (id, actor_id, action, resource, reason, created_at)
-			VALUES ($1, $2, 'schedule.job.create', $3, $4, $5)
-		`, "AUD-HPA-"+lineID, claims.Subject, jobID, hpaDemoSource, now); err != nil {
-			return hpaPeakSummary{}, err
+		for jobIndex := 1; jobIndex <= hpaDemoJobsPerLine; jobIndex++ {
+			jobID := fmt.Sprintf("HPA-JOB-%s-%03d", lineID, jobIndex)
+			orderJSON, _ := json.Marshal([]string{orderIDs[jobIndex-1]})
+			if _, err := tx.Exec(`
+				INSERT INTO schedule_jobs (id, line_id, status, message, source, order_ids, created_at, updated_at)
+				VALUES ($1, $2, 'queued', '多產線排程尖峰任務已送入背景佇列。', $3, $4::jsonb, $5, $5)
+			`, jobID, lineID, hpaDemoSource, string(orderJSON), now); err != nil {
+				return hpaPeakSummary{}, err
+			}
+			if _, err := tx.Exec(`
+				INSERT INTO audit_logs (id, actor_id, action, resource, reason, created_at)
+				VALUES ($1, $2, 'schedule.job.create', $3, $4, $5)
+			`, fmt.Sprintf("AUD-HPA-%s-%03d", lineID, jobIndex), claims.Subject, jobID, hpaDemoSource, now); err != nil {
+				return hpaPeakSummary{}, err
+			}
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -939,6 +1061,13 @@ func (s *PostgresStore) ClearHPAPeakDemo(claims auth.Claims) (hpaPeakSummary, er
 		UPDATE schedule_jobs
 		SET status = 'cancelled', message = '排程尖峰展示已取消。', updated_at = NOW()
 		WHERE (source = $1 OR line_id BETWEEN 'L001' AND 'L200') AND status IN ('queued', 'running')
+	`, hpaDemoSource); err != nil {
+		return hpaPeakSummary{}, err
+	}
+	if _, err := tx.Exec(`
+		DELETE FROM schedule_jobs
+		WHERE (source = $1 OR line_id BETWEEN 'L001' AND 'L200')
+		  AND status NOT IN ('queued', 'running', 'cancelled')
 	`, hpaDemoSource); err != nil {
 		return hpaPeakSummary{}, err
 	}
@@ -1039,20 +1168,13 @@ func (s *PostgresStore) resetHPAPeakDemoDB(tx *sql.Tx) error {
 }
 
 func (s *PostgresStore) hpaPeakSummaryDB() (hpaPeakSummary, error) {
-	summary := hpaPeakSummary{
-		Statuses: map[string]int{
-			string(domain.JobQueued):    0,
-			string(domain.JobRunning):   0,
-			string(domain.JobCompleted): 0,
-			string(domain.JobFailed):    0,
-			string(domain.JobCancelled): 0,
-		},
-		Topic:          "woms.schedule.jobs",
-		ConsumerGroup:  "woms-scheduler-workers",
-		HPAName:        "woms-woms-worker-hpa",
-		DeploymentName: "woms-woms-worker",
-		Reason:         "幾百條產線同時進行月底排程，Kafka lag 上升時 KEDA 會擴充 scheduler-worker pods。",
-		WatchCommand:   "kubectl get hpa,deploy,pod -n woms -w",
+	summary := hpaPeakSummaryDefaults()
+	summary.Statuses = map[string]int{
+		string(domain.JobQueued):    0,
+		string(domain.JobRunning):   0,
+		string(domain.JobCompleted): 0,
+		string(domain.JobFailed):    0,
+		string(domain.JobCancelled): 0,
 	}
 	if err := s.db.QueryRow(`
 		SELECT COUNT(DISTINCT line_id)

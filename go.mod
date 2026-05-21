@@ -6,6 +6,7 @@ require (
 	github.com/lib/pq v1.10.9
 	github.com/prometheus/client_golang v1.21.1
 	github.com/segmentio/kafka-go v0.4.47
+	golang.org/x/crypto v0.31.0
 )
 
 require (

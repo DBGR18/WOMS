@@ -47,7 +47,7 @@ Git 回覆 `Already up to date.`
 
 在不取代既有 Kafka lag 與 CPU triggers 的前提下，把 Gthulhu-backed scheduling-pressure signal 加到 WOMS scheduler-worker autoscaling path。
 
-WOMS 中類似 NF workload 的目標元件是 `scheduler-worker`：它是非同步排程執行者。API 接收排程請求並 publish job 到 Kafka；worker 消費 `woms.schedule.jobs`，針對每條 production line 執行 scheduling lock，將 allocation 寫入 PostgreSQL，並記錄 audit 結果。HPA demo 期間，API 會建立 200 條產線、1,000 張待排程訂單與 200 個 queued jobs，再由 workers 透過 consumer group `woms-scheduler-workers` 消化 backlog。
+WOMS 中類似 NF workload 的目標元件是 `scheduler-worker`：它是非同步排程執行者。API 接收排程請求並 publish job 到 Kafka；worker 消費 `woms.schedule.jobs`，針對每條 production line 執行 scheduling lock，將 allocation 寫入 PostgreSQL，並記錄 audit 結果。HPA demo 期間，API 會建立 200 條產線、1,000 張待排程訂單與 400 個 queued jobs，再由 workers 透過 consumer group `woms-scheduler-workers` 消化 backlog。
 
 PoC 要驗證這條 loop：
 

@@ -17,6 +17,7 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: api
     spec:
+      serviceAccountName: {{ include "woms.fullname" . }}-api
       containers:
         - name: api
           image: "{{ include "woms.image" (dict "registry" .Values.imageRegistry "repository" .Values.api.image.repository "tag" .Values.api.image.tag) }}"
@@ -44,8 +45,26 @@ spec:
               value: {{ .Values.api.env.kafkaBrokers | quote }}
             - name: KAFKA_SCHEDULE_TOPIC
               value: {{ .Values.api.env.scheduleTopic | quote }}
+            - name: KAFKA_CONSUMER_GROUP
+              value: {{ .Values.keda.kafka.consumerGroup | quote }}
             - name: KAFKA_PUBLISH_ENABLED
               value: {{ .Values.api.env.kafkaPublishEnabled | quote }}
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: HPA_DEMO_HPA_NAME
+              value: {{ printf "%s-worker-hpa" (include "woms.fullname" .) | quote }}
+            - name: HPA_DEMO_DEPLOYMENT_NAME
+              value: {{ printf "%s-worker" (include "woms.fullname" .) | quote }}
+            - name: HPA_DEMO_POD_LABEL_SELECTOR
+              value: {{ printf "app.kubernetes.io/instance=%s,app.kubernetes.io/component=scheduler-worker" .Release.Name | quote }}
+            - name: CORS_ALLOWED_ORIGIN
+              value: {{ .Values.api.env.corsAllowedOrigin | quote }}
+            - name: AUTH_MODE
+              value: {{ .Values.api.env.authMode | quote }}
+            - name: AUTH_SESSION_STORE
+              value: {{ .Values.api.env.authSessionStore | quote }}
             - name: API_DEPENDENCY_RETRY_TIMEOUT_MS
               value: {{ .Values.api.env.dependencyRetryTimeoutMs | quote }}
             - name: API_DEPENDENCY_RETRY_INTERVAL_MS

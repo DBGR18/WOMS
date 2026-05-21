@@ -4,7 +4,10 @@ const state = {
 };
 
 document.addEventListener("DOMContentLoaded", () => {
-    if (state.user && state.user.role !== "admin") {
+    if (!window.location.pathname.endsWith("/monitor.html")) {
+        return;
+    }
+    if (!state.user || state.user.role !== "admin") {
         window.location.href = "/";
         return;
     }

@@ -19,6 +19,9 @@ api:
     kafkaBrokers: kafka:9092
     scheduleTopic: woms.schedule.jobs
     kafkaPublishEnabled: "true"
+    corsAllowedOrigin: "*"
+    authMode: local
+    authSessionStore: ""
     dependencyRetryTimeoutMs: "120000"
     dependencyRetryIntervalMs: "2000"
   resources:
@@ -36,8 +39,13 @@ worker:
     tag: v0.1.42
   env:
     databaseUrl: postgres://woms:woms@postgres:5432/woms?sslmode=disable
+    redisAddr: redis-master:6379
     minJobDurationMs: "0"
     maxRetries: "3"
+    lockTtlMs: "15000"
+    lockRenewIntervalMs: "5000"
+    lockTimeoutMs: "10000"
+    backfillIntervalMs: "5000"
     dependencyRetryTimeoutMs: "120000"
     dependencyRetryIntervalMs: "2000"
   resources:

@@ -97,6 +97,9 @@ cp .env.example .env
 Important settings:
 
 - `JWT_SECRET`: JWT signing secret. Replace it in production.
+- `AUTH_MODE`: auth verifier mode. `local` uses WOMS JWT login; `edge` accepts the same signed bearer token shape for future gateway-issued tokens and still ignores plain `X-User-*` headers.
+- `AUTH_SESSION_STORE`: optional token session backend. Leave empty for stateless JWT; set `redis` only when Redis-backed token revocation is explicitly needed.
+- `CORS_ALLOWED_ORIGIN`: allowed API origin. Local defaults to `*`; demos can pin this to the web origin.
 - `API_STORE`: API store backend. Helm and Docker default to `postgres`; tests can use memory.
 - `DEMO_SEED_DATA`: defaults to `true`; set to `false` to start the API without demo orders.
 - `DATABASE_URL`: PostgreSQL connection string.
@@ -107,6 +110,8 @@ Important settings:
 - `API_DEPENDENCY_RETRY_TIMEOUT_MS` / `API_DEPENDENCY_RETRY_INTERVAL_MS`: API startup retry window and interval for PostgreSQL/Kafka readiness checks.
 - `WORKER_MIN_JOB_DURATION_MS`: demo minimum worker time per job. Production deployments can set it to `0`.
 - `WORKER_MAX_RETRIES`: maximum worker retries for transient DB/Kafka errors.
+- `WORKER_LOCK_TTL_MS` / `WORKER_LOCK_RENEW_INTERVAL_MS` / `WORKER_LOCK_TIMEOUT_MS`: Redis per-production-line scheduling lock TTL, renewal interval, and acquire timeout.
+- `WORKER_BACKFILL_INTERVAL_MS`: how often workers scan queued database jobs for retry/backfill. It must stay above zero when PostgreSQL/Redis lock mode is enabled.
 - `WORKER_DEPENDENCY_RETRY_TIMEOUT_MS` / `WORKER_DEPENDENCY_RETRY_INTERVAL_MS`: scheduler-worker startup retry window and interval for PostgreSQL/Kafka readiness checks.
 - `DOCKERHUB_NAMESPACE`: Docker Hub namespace.
 - `WOMS_IMAGE_TAG`: Docker image tag used by Docker Compose. Defaults to `latest` so Compose builds and local runs stay aligned with the Docker Hub `latest` tag.
@@ -162,7 +167,7 @@ Frontend behavior:
 
 - Users land on a dedicated login page until a valid session exists; internal pages are hidden before login.
 - Login is stored in browser `localStorage`, so refresh keeps the current session until the JWT expires or is rejected.
-- Admin users can assign account roles and scheduler production lines from the Admin panel. Non-admin users receive `403`.
+- Admin users can create accounts, assign roles and scheduler production lines, reset temporary passwords, and delete or disable accounts from the Admin panel. Non-admin users receive `403`.
 - Production line settings are loaded from `GET /api/lines`; each line includes a required IANA timezone, defaulting to `Asia/Taipei`, while Line D is configured as `Europe/London`. The active production line selector defaults to the lexicographically lowest line for sales/admin users and locks to the assigned line for scheduler users.
 - Exact filters support customer and priority. Customer filtering opens as a compact menu, and its options are scoped by the active status and priority filters; order status is controlled by the left status panel.
 - Status counts are scoped to the active production line.
@@ -309,7 +314,7 @@ ssh -L 8081:127.0.0.1:8081 ubuntu@192.168.56.101
 
 The HPA scenario for WOMS is the scheduler-worker backlog. During end-of-day planning or rush-order recovery, the API publishes many scheduling jobs to Kafka topic `woms.schedule.jobs`. The scheduler workers share consumer group `woms-scheduler-workers`; when lag exceeds `keda.kafka.lagThreshold`, KEDA creates and drives the HPA named `woms-woms-worker-hpa` for deployment `woms-woms-worker`. CPU utilization is kept as a secondary trigger for compute-heavy scheduling bursts.
 
-Log in to the web UI as admin, open the "multi-line scheduling peak" panel, and click the peak creation button. The API clears old `L001-L200` data, creates 200 demo lines, 1,000 pending orders, and 200 scheduling jobs, then publishes them to Kafka topic `woms.schedule.jobs`. Workers consume the backlog with consumer group `woms-scheduler-workers`; the chart creates the topic automatically with a partition count no smaller than `keda.maxReplicaCount`, so HPA-created worker pods can consume in parallel.
+Log in to the web UI as admin, open the "multi-line scheduling peak" panel, and click the peak creation button. The API clears old `L001-L200` data, creates 200 demo lines, 1,000 pending orders, and 400 scheduling jobs, then publishes them to Kafka topic `woms.schedule.jobs`. The demo creates multiple jobs per line so Redis line locks are exercised while workers consume the backlog with consumer group `woms-scheduler-workers`; the chart creates the topic automatically with a partition count no smaller than `keda.maxReplicaCount`, so HPA-created worker pods can consume in parallel.
 
 Watch KEDA create the HPA and scale the worker:
 

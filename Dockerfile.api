@@ -4,6 +4,7 @@ COPY go.mod go.sum ./
 COPY cmd ./cmd
 COPY db ./db
 COPY internal ./internal
+RUN chmod -R a+rX /src/db
 RUN go test ./...
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/woms-api ./cmd/api
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/healthcheck ./cmd/healthcheck

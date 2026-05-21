@@ -64,6 +64,8 @@ const state = {
 let pointerScheduleDrag = null;
 let mouseScheduleDrag = null;
 let suppressNextOrderClick = false;
+let hpaPeakPoller = null;
+let hpaPeakPollInFlight = false;
 
 document.querySelector('input[name="startDate"]').value = tomorrowDateInputValue();
 document.querySelector('input[name="dueDate"]').value = addDaysToDateKey(todayDateInputValue(), 3);
@@ -87,6 +89,9 @@ document.getElementById("login-form").addEventListener("submit", async (event) =
 });
 
 document.getElementById("logout-button").addEventListener("click", () => {
+  if (state.token) {
+    request("/api/auth/logout", { method: "POST" }).catch(() => {});
+  }
   clearSession();
   renderAuthState();
   renderWorkspace();
@@ -136,16 +141,62 @@ document.getElementById("assign-user-form").addEventListener("submit", async (ev
   }
 });
 
+document.getElementById("create-user-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const data = Object.fromEntries(new FormData(event.currentTarget));
+    const user = await request("/api/users", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    event.currentTarget.reset();
+    showMessage("帳號已建立", `${user.username} 可用 ${roleLabel(user.role)} 權限登入`);
+    await loadUsers();
+  } catch (error) {
+    showMessage("帳號建立失敗", error.message, "warn");
+  }
+});
+
+document.getElementById("reset-password-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const data = Object.fromEntries(new FormData(event.currentTarget));
+    const user = await request("/api/users/password", {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+    event.currentTarget.reset();
+    showMessage("密碼已重設", `${user.username} 可以使用新密碼登入`);
+  } catch (error) {
+    showMessage("密碼重設失敗", error.message, "warn");
+  }
+});
+
+document.getElementById("delete-user-button").addEventListener("click", async () => {
+  const username = document.getElementById("assign-username").value;
+  if (!username || !window.confirm(`確定要刪除或停用 ${username} 嗎？`)) {
+    return;
+  }
+  try {
+    const user = await request(`/api/users/${encodeURIComponent(username)}`, { method: "DELETE" });
+    showMessage("帳號已處理", user.deleted ? `${username} 已刪除` : `${user.username} 已停用`);
+    await loadUsers();
+  } catch (error) {
+    showMessage("帳號刪除失敗", error.message, "warn");
+  }
+});
+
 document.getElementById("create-hpa-peak").addEventListener("click", async () => {
   const ok = window.confirm("確定要建立 L001-L200 的多產線排程尖峰嗎？這會建立大量排程任務並可能觸發 worker 擴容。");
   if (!ok) {
     return;
   }
   try {
-    renderHPAPeakLoading("正在建立 200 條 demo 產線、1,000 張待排程訂單與 200 個排程任務...");
+    renderHPAPeakLoading("正在建立 200 條 demo 產線、1,000 張待排程訂單與 400 個排程任務...");
     const payload = await request("/api/demo/hpa-peak", { method: "POST" });
     state.hpaPeak = payload.summary;
     renderHPAPeakSummary();
+    syncHPAPeakPolling();
     showMessage("排程尖峰已建立", "多產線排程任務已送入背景佇列，請觀察 Kafka lag 與 worker HPA。");
     await refreshWorkspace();
   } catch (error) {
@@ -168,6 +219,7 @@ document.getElementById("clear-hpa-peak").addEventListener("click", async () => 
     const payload = await request("/api/demo/hpa-peak", { method: "DELETE" });
     state.hpaPeak = payload.summary;
     renderHPAPeakSummary();
+    syncHPAPeakPolling();
     showMessage("排程尖峰已清除", "L001-L200 的排程尖峰資料已清除。");
     await refreshWorkspace();
   } catch (error) {
@@ -443,9 +495,15 @@ configureLineForUser();
 renderAuthState();
 if (state.token) {
   refreshWorkspace().catch((error) => {
-    clearSession();
     renderAuthState();
-    showMessage("登入狀態已失效", error.message, "warn");
+    if (error.status === 401) {
+      clearSession();
+      renderAuthState();
+      showMessage("登入狀態已失效", error.message, "warn");
+      return;
+    }
+    renderWorkspace();
+    showMessage("工作區重新整理失敗", error.message, "warn");
   });
 } else {
   renderWorkspace();
@@ -502,6 +560,41 @@ async function loadHPAPeakSummary() {
   const payload = await request("/api/demo/hpa-peak");
   state.hpaPeak = payload.summary;
   renderHPAPeakSummary();
+  syncHPAPeakPolling();
+}
+
+function syncHPAPeakPolling() {
+  const active = state.token && state.user?.role === "admin" && isHPAPeakActive(state.hpaPeak);
+  if (!active) {
+    if (hpaPeakPoller) {
+      window.clearInterval(hpaPeakPoller);
+      hpaPeakPoller = null;
+    }
+    return;
+  }
+  if (hpaPeakPoller) {
+    return;
+  }
+  hpaPeakPoller = window.setInterval(async () => {
+    if (hpaPeakPollInFlight) {
+      return;
+    }
+    hpaPeakPollInFlight = true;
+    try {
+      await loadHPAPeakSummary();
+    } catch {
+      // Keep the current panel visible; manual refresh will surface errors.
+    } finally {
+      hpaPeakPollInFlight = false;
+    }
+  }, 3000);
+}
+
+function isHPAPeakActive(summary) {
+  if (!summary) {
+    return false;
+  }
+  return Number(summary.lineCount ?? 0) > 0 || Number(summary.orderCount ?? 0) > 0 || Number(summary.jobCount ?? 0) > 0;
 }
 
 async function loadLines() {
@@ -597,8 +690,10 @@ function renderAuthState() {
 function renderUsers() {
   const select = document.getElementById("assign-username");
   select.innerHTML = state.users.map((user) => `
-    <option value="${escapeHtml(user.username)}">${escapeHtml(user.username)} (${roleLabel(user.role)}${user.lineId ? `/${escapeHtml(user.lineId)}` : ""})</option>
+    <option value="${escapeHtml(user.username)}">${escapeHtml(user.username)} (${roleLabel(user.role)}${user.lineId ? `/${escapeHtml(user.lineId)}` : ""}${user.disabled ? "，停用" : ""})</option>
   `).join("");
+  const resetSelect = document.getElementById("reset-password-username");
+  resetSelect.innerHTML = select.innerHTML;
 }
 
 function renderHPAPeakLoading(message) {
@@ -623,12 +718,30 @@ function renderHPAPeakSummary() {
   const failedMessages = summary.failedMessages?.length
     ? `<div class="hpa-failures">${summary.failedMessages.map((message) => `<span>${escapeHtml(message)}</span>`).join("")}</div>`
     : "";
+  const autoscaling = summary.autoscaling;
+  const autoscalingError = autoscaling?.error
+    ? `<div class="hpa-failures"><span>${escapeHtml(autoscaling.error)}</span></div>`
+    : "";
+  const autoscalingPanel = autoscaling
+    ? `
+    <div class="hpa-autoscaling">
+      <span>HPA 目標 ${Number(autoscaling.desiredReplicas ?? 0).toLocaleString()} / ${Number(autoscaling.maxReplicas ?? 0).toLocaleString()}</span>
+      <span>目前 replicas ${Number(autoscaling.currentReplicas ?? 0).toLocaleString()}</span>
+      <span>Deployment ready ${Number(autoscaling.readyReplicas ?? 0).toLocaleString()} / ${Number(autoscaling.deploymentReplicas ?? 0).toLocaleString()}</span>
+      <span>Worker pods ready ${Number(autoscaling.readyPods ?? 0).toLocaleString()} / ${Number(autoscaling.workerPods ?? 0).toLocaleString()}</span>
+    </div>
+    ${autoscalingError}`
+    : `
+    <div class="hpa-autoscaling">
+      <span>Kubernetes 狀態 未連線</span>
+    </div>`;
   panel.innerHTML = `
     <div class="hpa-metrics">
       <span>產線 ${Number(summary.lineCount ?? 0).toLocaleString()}</span>
       <span>訂單 ${Number(summary.orderCount ?? 0).toLocaleString()}</span>
       <span>排程任務 ${Number(summary.jobCount ?? 0).toLocaleString()}</span>
     </div>
+    ${autoscalingPanel}
     <div class="hpa-status-grid">
       ${Object.entries(hpaJobStatusLabels).map(([status, label]) => `<span>${label} ${Number(hpaStatuses[status] ?? 0).toLocaleString()}</span>`).join("")}
     </div>
@@ -1748,9 +1861,17 @@ async function request(path, options = {}, needsAuth = true) {
       clearSession();
       renderAuthState();
     }
-    throw new Error(payload.error ?? "請求失敗，請稍後再試。");
+    throw new RequestError(payload.error ?? "請求失敗，請稍後再試。", response.status);
   }
   return payload;
+}
+
+class RequestError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.name = "RequestError";
+    this.status = status;
+  }
 }
 
 function saveSession(token, user) {
@@ -1772,10 +1893,12 @@ function clearSession() {
   state.orders = [];
   state.calendarAllocations = [];
   state.preview = null;
+  state.hpaPeak = null;
   state.productionOrderId = "";
   state.selectedOrderIds.clear();
   localStorage.removeItem("woms.token");
   localStorage.removeItem("woms.user");
+  syncHPAPeakPolling();
 }
 
 function focusCreatedOrder(order) {

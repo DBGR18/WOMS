@@ -6,9 +6,11 @@ const values = readFileSync(new URL("./values.yaml", import.meta.url), "utf8");
 const chart = readFileSync(new URL("./Chart.yaml", import.meta.url), "utf8");
 const scaledObject = readFileSync(new URL("./templates/keda-scaledobject.yaml", import.meta.url), "utf8");
 const apiDeployment = readFileSync(new URL("./templates/api-deployment.yaml", import.meta.url), "utf8");
+const apiRBAC = readFileSync(new URL("./templates/api-rbac.yaml", import.meta.url), "utf8");
 const workerDeployment = readFileSync(new URL("./templates/worker-deployment.yaml", import.meta.url), "utf8");
 const webDeployment = readFileSync(new URL("./templates/web-deployment.yaml", import.meta.url), "utf8");
 const services = readFileSync(new URL("./templates/services.yaml", import.meta.url), "utf8");
+const ingress = readFileSync(new URL("./templates/ingress.yaml", import.meta.url), "utf8");
 const prometheusConfig = readFileSync(new URL("./templates/prometheus-configmap.yaml", import.meta.url), "utf8");
 const grafanaConfig = readFileSync(new URL("./templates/grafana-configmap.yaml", import.meta.url), "utf8");
 const gthulhuPsm = readFileSync(new URL("./templates/gthulhu-podschedulingmetrics.yaml", import.meta.url), "utf8");
@@ -35,10 +37,17 @@ test("Helm values keep async scheduling and HPA demo defaults wired", () => {
   assert.match(values, /kafkaBrokers:\s+kafka:9092/);
   assert.match(values, /scheduleTopic:\s+woms\.schedule\.jobs/);
   assert.match(values, /kafkaPublishEnabled:\s+"true"/);
+  assert.match(values, /corsAllowedOrigin:\s+"\*"/);
+  assert.match(values, /authMode:\s+local/);
+  assert.match(values, /authSessionStore:\s+""/);
   assert.match(values, /dependencyRetryTimeoutMs:\s+"120000"/);
   assert.match(values, /dependencyRetryIntervalMs:\s+"2000"/);
   assert.match(values, /minJobDurationMs:\s+"0"/);
   assert.match(values, /maxRetries:\s+"3"/);
+  assert.match(values, /lockTtlMs:\s+"15000"/);
+  assert.match(values, /lockRenewIntervalMs:\s+"5000"/);
+  assert.match(values, /lockTimeoutMs:\s+"10000"/);
+  assert.match(values, /backfillIntervalMs:\s+"5000"/);
   assert.match(values, /consumerGroup:\s+woms-scheduler-workers/);
   assert.match(values, /bootstrapServers:\s+"kafka\.\{\{ \.Release\.Namespace \}\}\.svc\.cluster\.local:9092"/);
   assert.match(values, /lagThreshold:\s+"10"/);
@@ -215,7 +224,16 @@ test("API and worker deployments expose PostgreSQL, Kafka, and retry env", () =>
   assert.match(apiDeployment, /name:\s+API_STORE/);
   assert.match(apiDeployment, /name:\s+DATABASE_URL/);
   assert.match(apiDeployment, /name:\s+KAFKA_SCHEDULE_TOPIC/);
+  assert.match(apiDeployment, /name:\s+KAFKA_CONSUMER_GROUP/);
   assert.match(apiDeployment, /name:\s+KAFKA_PUBLISH_ENABLED/);
+  assert.match(apiDeployment, /name:\s+POD_NAMESPACE/);
+  assert.match(apiDeployment, /name:\s+HPA_DEMO_HPA_NAME/);
+  assert.match(apiDeployment, /name:\s+HPA_DEMO_DEPLOYMENT_NAME/);
+  assert.match(apiDeployment, /name:\s+HPA_DEMO_POD_LABEL_SELECTOR/);
+  assert.match(apiDeployment, /serviceAccountName:\s+\{\{ include "woms\.fullname" \. \}\}-api/);
+  assert.match(apiDeployment, /name:\s+CORS_ALLOWED_ORIGIN/);
+  assert.match(apiDeployment, /name:\s+AUTH_MODE/);
+  assert.match(apiDeployment, /name:\s+AUTH_SESSION_STORE/);
   assert.match(apiDeployment, /name:\s+API_DEPENDENCY_RETRY_TIMEOUT_MS/);
   assert.match(apiDeployment, /name:\s+API_DEPENDENCY_RETRY_INTERVAL_MS/);
   assert.match(apiDeployment, /startupProbe:[\s\S]*path:\s+\/healthz[\s\S]*failureThreshold:\s+36/);
@@ -223,12 +241,34 @@ test("API and worker deployments expose PostgreSQL, Kafka, and retry env", () =>
   assert.match(workerDeployment, /value:\s+\{\{ tpl \.Values\.keda\.kafka\.bootstrapServers \. \| quote \}\}/);
   assert.match(workerDeployment, /name:\s+KAFKA_CONSUMER_GROUP/);
   assert.match(workerDeployment, /name:\s+DATABASE_URL/);
+  assert.match(workerDeployment, /name:\s+REDIS_ADDR/);
   assert.match(workerDeployment, /name:\s+WORKER_MIN_JOB_DURATION_MS/);
   assert.match(workerDeployment, /name:\s+WORKER_MAX_RETRIES/);
+  assert.match(workerDeployment, /name:\s+WORKER_LOCK_TTL_MS/);
+  assert.match(workerDeployment, /name:\s+WORKER_LOCK_RENEW_INTERVAL_MS/);
+  assert.match(workerDeployment, /name:\s+WORKER_LOCK_TIMEOUT_MS/);
+  assert.match(workerDeployment, /name:\s+WORKER_BACKFILL_INTERVAL_MS/);
   assert.match(workerDeployment, /name:\s+WORKER_DEPENDENCY_RETRY_TIMEOUT_MS/);
   assert.match(workerDeployment, /name:\s+WORKER_DEPENDENCY_RETRY_INTERVAL_MS/);
   assert.match(workerDeployment, /if not \.Values\.keda\.enabled/);
   assert.match(workerDeployment, /replicas:\s+\{\{ \.Values\.worker\.replicaCount \}\}/);
+});
+
+test("API can read worker autoscaling status for the HPA demo panel", () => {
+  assert.match(apiRBAC, /kind:\s+ServiceAccount/);
+  assert.match(apiRBAC, /name:\s+\{\{ include "woms\.fullname" \. \}\}-api/);
+  assert.match(apiRBAC, /resources:\s+\["pods"\][\s\S]*verbs:\s+\["get", "list"\]/);
+  assert.match(apiRBAC, /apiGroups:\s+\["apps"\][\s\S]*resources:\s+\["deployments"\][\s\S]*verbs:\s+\["get"\]/);
+  assert.match(apiRBAC, /apiGroups:\s+\["autoscaling"\][\s\S]*resources:\s+\["horizontalpodautoscalers"\][\s\S]*verbs:\s+\["get"\]/);
+  assert.match(apiRBAC, /kind:\s+RoleBinding/);
+});
+
+test("Ingress keeps login public while protecting API prefix", () => {
+  assert.match(ingress, /name:\s+\{\{ include "woms\.fullname" \. \}\}-public/);
+  assert.match(ingress, /path:\s+\/api\/auth\/login[\s\S]*pathType:\s+Exact[\s\S]*name:\s+\{\{ include "woms\.fullname" \. \}\}-api/);
+  assert.match(ingress, /name:\s+\{\{ include "woms\.fullname" \. \}\}-api-secure/);
+  assert.match(ingress, /nginx\.ingress\.kubernetes\.io\/auth-url/);
+  assert.match(ingress, /path:\s+\/api[\s\S]*pathType:\s+Prefix/);
 });
 
 test("Web deployment is runnable without manual securityContext patches", () => {

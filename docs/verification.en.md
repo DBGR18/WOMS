@@ -55,6 +55,17 @@ Check scheduler line isolation:
 - Query that job as `scheduler-a`.
 - Expected: `403 Forbidden`.
 
+Check admin account management:
+
+```bash
+curl -i http://localhost:8080/api/users \
+  -H "Authorization: Bearer <admin-token>" \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"class-sales","password":"temporary","role":"sales"}'
+```
+
+Expected: `201 Created`, the response omits password material, and the new account can log in. A sales or scheduler token calling the same endpoint returns `403 Forbidden`.
+
 Check calendar behavior:
 
 - Create a schedule job as a scheduler user.
@@ -115,7 +126,7 @@ kubectl get scaledobject,hpa -n woms
 kubectl describe scaledobject -n woms
 ```
 
-Log in to the web UI as admin and click the multi-line scheduling peak creation button. Confirm that the panel shows 200 lines, 1,000 orders, 200 queued jobs, and the Kafka topic, consumer group, HPA, and deployment names. Then watch:
+Log in to the web UI as admin and click the multi-line scheduling peak creation button. Confirm that the panel shows 200 lines, 1,000 orders, 400 queued jobs, and the Kafka topic, consumer group, HPA, and deployment names. Then watch:
 
 ```bash
 kubectl get deploy -n woms -w
@@ -218,12 +229,20 @@ The scripts clean temporary load pods/jobs only. They leave WOMS, Gthulhu, Prome
 
 Submit two concurrent schedule jobs for the same line:
 
-- Expected: no overlapping schedule version is created.
-- One job should wait, retry, or fail cleanly.
+- Expected: scheduler-worker uses `woms:locks:schedule-line:<lineId>` in Redis, no overlapping schedule version is created, and one job waits, retries, or fails cleanly.
 
 Submit jobs for different lines:
 
 - Expected: processing can run in parallel.
+
+Inspect Redis during a long-running worker job:
+
+```bash
+redis-cli -h <redis-host> --scan --pattern 'woms:locks:schedule-line:*'
+redis-cli -h <redis-host> pttl woms:locks:schedule-line:A
+```
+
+Expected: the lock has a positive TTL while the job runs and is released after job completion/failure.
 
 ## 10. Feature Completion Standard
 
