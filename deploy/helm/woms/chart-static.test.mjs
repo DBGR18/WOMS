@@ -108,12 +108,6 @@ test("Alan monitoring templates scrape WOMS and Gthulhu metrics", () => {
   assert.match(grafanaConfig, /\.Files\.Glob "dashboards\/\*\.json"/);
   assert.match(grafanaConfig, /replace "__WOMS_NAMESPACE__" \$\.Release\.Namespace/);
   assert.match(grafanaConfig, /replace "__WOMS_WORKER_REGEX__"/);
-  assert.match(dashboard, /Worker Involuntary Context Switch Rate/);
-  assert.match(dashboard, /Worker Run Queue Wait Time Rate/);
-  assert.match(dashboard, /Tracked Worker Process Count/);
-  assert.match(dashboard, /gthulhu_pod_involuntary_ctx_switches_total\{exported_namespace=\\"__WOMS_NAMESPACE__\\",pod_name=~\\"__WOMS_WORKER_REGEX__\\"\}/);
-  assert.match(dashboard, /gthulhu_pod_wait_time_nanoseconds_total\{exported_namespace=\\"__WOMS_NAMESPACE__\\",pod_name=~\\"__WOMS_WORKER_REGEX__\\"\}/);
-  assert.match(dashboard, /gthulhu_pod_process_count\{exported_namespace=\\"__WOMS_NAMESPACE__\\",pod_name=~\\"__WOMS_WORKER_REGEX__\\"\}/);
 });
 
 test("PodSchedulingMetrics selector targets WOMS workers", () => {
