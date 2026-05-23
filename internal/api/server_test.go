@@ -1174,10 +1174,12 @@ func TestSalesDraftPreviewAcceptsTomorrowDueDate(t *testing.T) {
 	}
 }
 
-func TestSalesDraftPreviewDoesNotScheduleOtherPendingOrders(t *testing.T) {
+func TestSalesDraftPreviewIncludesPendingOrdersAsPreviewAllocations(t *testing.T) {
 	server := NewServer("secret", NewMemoryStore())
 	salesToken := login(t, server, "sales", "demo")
-	createOrder(t, server, salesToken, "A")
+	for range 4 {
+		createOrderWithPriorityAndDue(t, server, salesToken, "A", "low", "2026-05-03")
+	}
 
 	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","currentDate":"2026-04-30","draftOrder":{"customer":"Draft Co","lineId":"A","quantity":2500,"priority":"low","dueDate":"2026-05-03"}}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
@@ -1189,19 +1191,135 @@ func TestSalesDraftPreviewDoesNotScheduleOtherPendingOrders(t *testing.T) {
 	}
 	var payload struct {
 		Allocations []struct {
-			OrderID string `json:"orderId"`
+			OrderID  string             `json:"orderId"`
+			Customer string             `json:"customer"`
+			Date     string             `json:"date"`
+			Status   domain.OrderStatus `json:"status"`
 		} `json:"allocations"`
 	}
 	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode preview response: %v", err)
 	}
-	if len(payload.Allocations) == 0 {
-		t.Fatal("expected draft allocation")
+	if len(payload.Allocations) != 5 {
+		t.Fatalf("expected existing pending orders plus draft allocation, got %+v", payload.Allocations)
 	}
+	pendingOnStartDate := 0
 	for _, allocation := range payload.Allocations {
-		if allocation.OrderID != "PREVIEW-DRAFT" {
-			t.Fatalf("draft preview should not include existing pending orders, got %+v", payload.Allocations)
+		if allocation.Status != domain.StatusPending {
+			t.Fatalf("expected pending preview allocation status, got %+v", allocation)
 		}
+		if strings.HasPrefix(allocation.Date, "2026-05-01") {
+			pendingOnStartDate++
+		}
+	}
+	if pendingOnStartDate != 4 {
+		t.Fatalf("expected pending backlog to fill start date capacity, got %+v", payload.Allocations)
+	}
+	draftOnSecondDay := false
+	for _, allocation := range payload.Allocations {
+		if allocation.OrderID == previewDraftOrderID && strings.HasPrefix(allocation.Date, "2026-05-02") {
+			draftOnSecondDay = true
+		}
+	}
+	if !draftOnSecondDay {
+		t.Fatalf("expected draft allocation after pending backlog capacity, got %+v", payload.Allocations)
+	}
+	if payload.Allocations[len(payload.Allocations)-1].Customer != "Draft Co" {
+		t.Fatalf("expected draft customer in preview allocation, got %+v", payload.Allocations)
+	}
+}
+
+func TestSchedulerPreviewKeepsUnselectedPendingOrdersOutOfCapacity(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	salesToken := login(t, server, "sales", "demo")
+	for range 4 {
+		createOrderWithPriorityAndDue(t, server, salesToken, "A", "low", "2026-05-03")
+	}
+	selectedOrderID := createOrderWithPriorityAndDue(t, server, salesToken, "A", "low", "2026-05-03")
+	schedulerA := login(t, server, "scheduler-a", "demo")
+
+	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","currentDate":"2026-04-30","orderIds":["` + selectedOrderID + `"]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
+	req.Header.Set("Authorization", "Bearer "+schedulerA)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("scheduler preview failed: %d %s", res.Code, res.Body.String())
+	}
+	var payload struct {
+		Allocations []struct {
+			OrderID string `json:"orderId"`
+			Date    string `json:"date"`
+		} `json:"allocations"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode scheduler preview response: %v", err)
+	}
+	if len(payload.Allocations) != 1 || payload.Allocations[0].OrderID != selectedOrderID || !strings.HasPrefix(payload.Allocations[0].Date, "2026-05-01") {
+		t.Fatalf("scheduler preview should ignore unselected pending capacity, got %+v", payload.Allocations)
+	}
+}
+
+func TestScheduleCalendarDoesNotIncludePendingPreviewAllocations(t *testing.T) {
+	server := NewServer("secret", NewMemoryStore())
+	salesToken := login(t, server, "sales", "demo")
+	createOrderWithPriorityAndDue(t, server, salesToken, "A", "low", "2026-05-03")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/schedules/calendar?lineId=A&month=2026-05", nil)
+	req.Header.Set("Authorization", "Bearer "+salesToken)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("calendar failed: %d %s", res.Code, res.Body.String())
+	}
+	var payload struct {
+		Allocations []calendarAllocation `json:"allocations"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode calendar response: %v", err)
+	}
+	if len(payload.Allocations) != 0 {
+		t.Fatalf("pending preview allocations should not affect monthly calendar, got %+v", payload.Allocations)
+	}
+}
+
+func TestSalesDraftPreviewReportsPendingOrderConflictCausedByDraft(t *testing.T) {
+	store := NewMemoryStore()
+	server := NewServer("secret", store)
+	salesToken := login(t, server, "sales", "demo")
+	store.allocations = append(store.allocations, domain.ScheduleAllocation{
+		OrderID:  "EXISTING-CAPACITY",
+		LineID:   "A",
+		Date:     mustAPIDate(t, "2026-05-01"),
+		Quantity: 7500,
+		Priority: domain.PriorityLow,
+		Status:   domain.StatusScheduled,
+	})
+	pendingOrderID := createOrderWithPriorityAndDue(t, server, salesToken, "A", "low", "2026-05-01")
+
+	body := bytes.NewBufferString(`{"lineId":"A","startDate":"2026-05-01","currentDate":"2026-04-30","draftOrder":{"customer":"Rush Draft","lineId":"A","quantity":2500,"priority":"high","dueDate":"2026-05-02"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/schedules/preview", body)
+	req.Header.Set("Authorization", "Bearer "+salesToken)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("preview failed: %d %s", res.Code, res.Body.String())
+	}
+	var payload struct {
+		Conflicts []struct {
+			OrderID            string `json:"orderId"`
+			Reason             string `json:"reason"`
+			EarliestFinishDate string `json:"earliestFinishDate"`
+		} `json:"conflicts"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode preview response: %v", err)
+	}
+	if len(payload.Conflicts) != 1 {
+		t.Fatalf("expected one pending order conflict caused by draft, got %+v", payload.Conflicts)
+	}
+	if payload.Conflicts[0].OrderID != pendingOrderID || payload.Conflicts[0].Reason != "capacity cannot satisfy order before due date" || !strings.HasPrefix(payload.Conflicts[0].EarliestFinishDate, "2026-05-02") {
+		t.Fatalf("unexpected draft-caused pending conflict: %+v", payload.Conflicts)
 	}
 }
 

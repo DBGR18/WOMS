@@ -1372,6 +1372,8 @@ type scheduleRequest struct {
 	DraftOrder          *createOrderRequest `json:"draftOrder,omitempty"`
 }
 
+const previewDraftOrderID = "PREVIEW-DRAFT"
+
 func (s *MemoryStore) PreviewSchedule(req scheduleRequest, claims auth.Claims) (schedulePreviewResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1916,12 +1918,32 @@ func (s *MemoryStore) planLocked(req scheduleRequest, claims auth.Claims) (sched
 			return scheduler.Result{}, err
 		}
 		inputs = append(inputs, scheduler.OrderInput{
-			ID:       "PREVIEW-DRAFT",
+			ID:       previewDraftOrderID,
+			Customer: strings.TrimSpace(draft.Customer),
 			LineID:   draft.LineID,
 			Quantity: draft.Quantity,
 			Priority: draft.Priority,
+			Status:   domain.StatusPending,
 			DueDate:  dueDate,
 		})
+		// Sales draft previews account for the pending backlog as capacity usage
+		// and return those pending preview allocations for the preview dialog only.
+		// Scheduler previews/jobs still use the non-draft branch, so formal scheduling
+		// keeps excluding unrelated pending orders from daily capacity.
+		for _, order := range s.orders {
+			if order.LineID != lineID || order.Status != domain.StatusPending {
+				continue
+			}
+			inputs = append(inputs, scheduler.OrderInput{
+				ID:       order.ID,
+				Customer: order.Customer,
+				LineID:   order.LineID,
+				Quantity: order.Quantity,
+				Priority: order.Priority,
+				Status:   order.Status,
+				DueDate:  order.DueDate,
+			})
+		}
 	}
 	if req.DraftOrder == nil {
 		for _, order := range s.orders {
@@ -1937,9 +1959,11 @@ func (s *MemoryStore) planLocked(req scheduleRequest, claims auth.Claims) (sched
 			}
 			inputs = append(inputs, scheduler.OrderInput{
 				ID:       order.ID,
+				Customer: order.Customer,
 				LineID:   order.LineID,
 				Quantity: order.Quantity,
 				Priority: order.Priority,
+				Status:   order.Status,
 				DueDate:  order.DueDate,
 			})
 		}
@@ -1979,7 +2003,7 @@ func (s *MemoryStore) planLocked(req scheduleRequest, claims auth.Claims) (sched
 		})
 	}
 
-	return scheduler.Plan(scheduler.Request{
+	planRequest := scheduler.Request{
 		LineID:              lineID,
 		CapacityPerDay:      line.CapacityPerDay,
 		StartDate:           startDate,
@@ -1989,7 +2013,25 @@ func (s *MemoryStore) planLocked(req scheduleRequest, claims auth.Claims) (sched
 		ManualForce:         req.ManualForce,
 		ForceReason:         req.Reason,
 		AllowLateCompletion: req.AllowLateCompletion,
-	})
+	}
+	var baseline scheduler.Result
+	var err error
+	if req.DraftOrder != nil {
+		baselineRequest := planRequest
+		baselineRequest.Orders = withoutDraftOrderInputs(inputs)
+		baseline, err = scheduler.Plan(baselineRequest)
+		if err != nil {
+			return scheduler.Result{}, err
+		}
+	}
+	result, err := scheduler.Plan(planRequest)
+	if err != nil {
+		return scheduler.Result{}, err
+	}
+	if req.DraftOrder != nil {
+		result = salesDraftPreviewResult(result, baseline)
+	}
+	return result, nil
 }
 
 func canPersistConflicts(req scheduleRequest, conflicts []scheduler.Conflict) bool {
@@ -2002,6 +2044,38 @@ func canPersistConflicts(req scheduleRequest, conflicts []scheduler.Conflict) bo
 		}
 	}
 	return true
+}
+
+func withoutDraftOrderInputs(inputs []scheduler.OrderInput) []scheduler.OrderInput {
+	orders := make([]scheduler.OrderInput, 0, len(inputs))
+	for _, input := range inputs {
+		if input.ID == previewDraftOrderID {
+			continue
+		}
+		orders = append(orders, input)
+	}
+	return orders
+}
+
+func salesDraftPreviewResult(result, baseline scheduler.Result) scheduler.Result {
+	filtered := scheduler.Result{
+		Allocations: result.Allocations,
+	}
+	baselineConflicts := map[string]bool{}
+	for _, conflict := range baseline.Conflicts {
+		baselineConflicts[conflict.OrderID+"|"+conflict.Reason] = true
+	}
+	for _, conflict := range result.Conflicts {
+		if conflict.OrderID == previewDraftOrderID || !baselineConflicts[conflict.OrderID+"|"+conflict.Reason] {
+			filtered.Conflicts = append(filtered.Conflicts, conflict)
+		}
+	}
+	for _, allocation := range result.Allocations {
+		if allocation.OrderID == previewDraftOrderID {
+			filtered.FinishDate = allocation.Date
+		}
+	}
+	return filtered
 }
 
 func (s *MemoryStore) splitAllocationOrderIDsLocked(allocations []scheduler.Allocation) ([]scheduler.Allocation, map[string]int) {

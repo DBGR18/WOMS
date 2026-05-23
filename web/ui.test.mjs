@@ -103,6 +103,28 @@ test("schedule preview uses API currentDate as the confirmation payload source",
   assert.match(app, /currentDate:\s*result\.currentDate\s*\?\?\s*payloadData\.currentDate\s*\?\?\s*todayDateInputValue\(\)/);
 });
 
+test("main monthly calendar ignores preview allocations", () => {
+  const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");
+  const start = app.indexOf("function renderCalendar()");
+  const end = app.indexOf("function renderPreviewSummary()", start);
+  const body = app.slice(start, end);
+  assert.match(body, /groupAllocationsByDate\(state\.calendarAllocations\)/);
+  assert.doesNotMatch(body, /mergePreviewCalendarAllocations/);
+  assert.doesNotMatch(body, /state\.preview\?\.allocations/);
+});
+
+test("sales draft conflict copy is separate from scheduler conflict actions", () => {
+  const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");
+  const salesBranchStart = app.indexOf("if (salesDraft)");
+  const schedulerBranchStart = app.indexOf("return `", app.indexOf("}", salesBranchStart));
+  const salesBranch = app.slice(salesBranchStart, schedulerBranchStart);
+  assert.match(salesBranch, /這張待排程訂單由於新訂單的影響/);
+  assert.doesNotMatch(salesBranch, /可在下方選取衝突訂單與可移動訂單，產生最早完成解法/);
+  assert.doesNotMatch(salesBranch, /data-preview-action="unselect-conflict-order"/);
+  assert.match(app, /可在下方選取衝突訂單與可移動訂單，產生最早完成解法/);
+  assert.match(app, /data-preview-action="unselect-conflict-order"/);
+});
+
 const order = {
   id: "ORD-0000001",
   customer: "ACME Silicon",

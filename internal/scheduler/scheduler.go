@@ -14,9 +14,11 @@ var ErrInvalidRequest = errors.New("invalid schedule request")
 
 type OrderInput struct {
 	ID       string
+	Customer string
 	LineID   string
 	Quantity int
 	Priority domain.Priority
+	Status   domain.OrderStatus
 	DueDate  time.Time
 }
 
@@ -30,13 +32,15 @@ type ExistingAllocation struct {
 }
 
 type Allocation struct {
-	OrderID       string          `json:"orderId"`
-	SourceOrderID string          `json:"sourceOrderId,omitempty"`
-	LineID        string          `json:"lineId"`
-	Date          time.Time       `json:"date"`
-	Quantity      int             `json:"quantity"`
-	Priority      domain.Priority `json:"priority"`
-	Locked        bool            `json:"locked"`
+	OrderID       string             `json:"orderId"`
+	SourceOrderID string             `json:"sourceOrderId,omitempty"`
+	Customer      string             `json:"customer,omitempty"`
+	LineID        string             `json:"lineId"`
+	Date          time.Time          `json:"date"`
+	Quantity      int                `json:"quantity"`
+	Priority      domain.Priority    `json:"priority"`
+	Status        domain.OrderStatus `json:"status,omitempty"`
+	Locked        bool               `json:"locked"`
 }
 
 type Conflict struct {
@@ -154,10 +158,12 @@ func Plan(req Request) (Result, error) {
 			qty := min(remaining, available)
 			result.Allocations = append(result.Allocations, Allocation{
 				OrderID:  order.ID,
+				Customer: order.Customer,
 				LineID:   req.LineID,
 				Date:     day,
 				Quantity: qty,
 				Priority: order.Priority,
+				Status:   order.Status,
 				Locked:   order.Priority == domain.PriorityHigh,
 			})
 			newUsed[key] += qty

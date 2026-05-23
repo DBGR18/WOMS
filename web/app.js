@@ -1133,10 +1133,7 @@ function renderCalendar() {
   const monthIndex = state.calendarDate.getUTCMonth();
   document.getElementById("calendar-title").textContent = `${year}-${String(monthIndex + 1).padStart(2, "0")}`;
 
-  const previewAllocations = state.preview?.allocations ?? [];
-  const resolutionOrderIds = state.preview?.request?.resolutionOrderIds ?? [];
-  const mergedAllocations = mergePreviewCalendarAllocations(previewAllocations, state.calendarAllocations, resolutionOrderIds);
-  const groups = groupAllocationsByDate(mergedAllocations);
+  const groups = groupAllocationsByDate(state.calendarAllocations);
   const grid = document.getElementById("calendar-grid");
   grid.innerHTML = "";
   for (const day of monthGrid(year, monthIndex)) {
@@ -1310,15 +1307,28 @@ function renderPreviewCalendar(allocations) {
 }
 
 function renderConflictItem(conflict, index = 0, withAcknowledgement = false) {
+  const salesDraft = state.preview?.kind === "sales-draft";
   const affected = conflict.affectedOrderIds?.length ? `影響：${conflict.affectedOrderIds.join(", ")}` : "無已知受影響訂單";
   const finishDate = dateOnly(conflict.earliestFinishDate);
-  const canAcknowledge = withAcknowledgement && conflict.reason === "existing allocations require manual review or reschedule";
+  const canAcknowledge = !salesDraft && withAcknowledgement && conflict.reason === "existing allocations require manual review or reschedule";
   const acknowledgement = canAcknowledge ? `
     <label class="check-option conflict-ack">
       <input type="checkbox" data-conflict-ack="${index}">
       <span>確認以人工介入處理此衝突</span>
     </label>
   ` : "";
+  if (salesDraft) {
+    const explanation = conflict.orderId === "PREVIEW-DRAFT"
+      ? conflictExplanation(conflict)
+      : "這張待排程訂單由於新訂單的影響，在目前開始日期與交期之間沒有足夠產能。需要提前開始、延後交期、拆單，或調整訂單數量。";
+    return `
+      <div class="preview-item high">
+        <strong>${escapeHtml(conflict.orderId)}</strong>
+        <span>${escapeHtml(explanation)}</span>
+        <span>最早完成：${finishDate}。</span>
+      </div>
+    `;
+  }
   return `
     <div class="preview-item high">
       <strong>${escapeHtml(conflict.orderId)}</strong>
