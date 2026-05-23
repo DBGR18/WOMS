@@ -25,3 +25,24 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- printf "%s:%s" .repository .tag -}}
 {{- end -}}
 {{- end -}}
+
+{{- define "woms.externalScheme" -}}
+{{- ternary "https" "http" .Values.ingress.tls.enabled -}}
+{{- end -}}
+
+{{- define "woms.grafanaExternalPath" -}}
+{{- $path := default "/grafana" .Values.monitoring.grafana.externalPath | trimSuffix "/" -}}
+{{- if hasPrefix "/" $path -}}
+{{- $path -}}
+{{- else -}}
+{{- printf "/%s" $path -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "woms.grafanaRootUrl" -}}
+{{- if .Values.monitoring.grafana.env.rootUrl -}}
+{{- .Values.monitoring.grafana.env.rootUrl -}}
+{{- else -}}
+{{- printf "%s://%s%s/" (include "woms.externalScheme" .) .Values.ingress.host (include "woms.grafanaExternalPath" .) -}}
+{{- end -}}
+{{- end -}}

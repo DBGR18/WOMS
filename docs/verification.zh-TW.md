@@ -85,17 +85,21 @@ docker compose up --build
 
 - API health: `curl http://localhost:8080/healthz`
 - Web: `http://localhost:8081`
+- 透過 Web proxy 存取 Grafana：`http://localhost:8081/grafana`
 
 ## 4. Helm Render 驗證
 
 ```bash
 helm template woms ./deploy/helm/woms
+helm template woms ./deploy/helm/woms --set ingress.enabled=true --set ingress.host=woms.local
 ./scripts/verify-hpa-render.sh
 ```
 
 期望輸出包含：
 
 - `Deployment`：api、worker、web。
+- Web deployment env `GRAFANA_UPSTREAM=woms-woms-grafana:3000`。
+- 使用 ingress host `woms.local` render 時，Grafana deployment env 包含 `GF_SERVER_ROOT_URL=http://woms.local/grafana/` 與 `GF_SERVER_SERVE_FROM_SUB_PATH=true`。
 - `Ingress`：public、api-secure。
 - `ScaledObject`：worker Kafka/CPU triggers。
 - `ScaledObject.spec.advanced.horizontalPodAutoscalerConfig.name`：`woms-woms-worker-hpa`。
@@ -116,6 +120,7 @@ curl -i https://woms.local/api/orders -H "Authorization: Bearer <valid-token>"
 - 有效 token 通過 Ingress auth。
 - API 仍會執行自身 JWT/RBAC 檢查。
 - HTTP 會 redirect HTTPS。
+- Grafana 可透過 `http(s)://woms.local/grafana` 開啟，不需要另外對 Grafana port-forward，且 browser requests 會維持在 `/grafana/api/...`。
 
 ## 6. KEDA / HPA 驗證
 

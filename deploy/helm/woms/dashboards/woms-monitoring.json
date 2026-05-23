@@ -29,7 +29,7 @@
       "type": "stat",
       "gridPos": {
         "h": 5,
-        "w": 4,
+        "w": 6,
         "x": 0,
         "y": 0
       },
@@ -97,68 +97,13 @@
     },
     {
       "id": 2,
-      "title": "HTTP Request Rate (5 m)",
-      "description": "Requests per second averaged over the last 5 minutes, by method \u00b7 path \u00b7 status",
-      "type": "timeseries",
-      "gridPos": {
-        "h": 5,
-        "w": 14,
-        "x": 4,
-        "y": 0
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
-      },
-      "targets": [
-        {
-          "expr": "sum by (method, path, status) (rate(woms_http_requests_total[5m]))",
-          "legendFormat": "{{method}} {{path}} \u00b7 {{status}}",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 12,
-            "gradientMode": "opacity",
-            "showPoints": "never",
-            "spanNulls": true,
-            "drawStyle": "line"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "mean",
-            "max",
-            "last"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "id": 3,
       "title": "HTTP Req/s \u2014 Total (1 m)",
       "description": "Aggregate requests/second across all routes",
       "type": "stat",
       "gridPos": {
         "h": 5,
         "w": 6,
-        "x": 18,
+        "x": 6,
         "y": 0
       },
       "datasource": {
@@ -216,7 +161,64 @@
       }
     },
     {
-      "id": 4,
+      "id": 8,
+      "title": "Error Rate",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(woms_http_requests_total{status=~\"[45].*\"}[5m])) / sum(rate(woms_http_requests_total[5m]))",
+          "legendFormat": "Error Rate",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      }
+    },
+    {
+      "id": 7,
+      "title": "Request Latency (P99)",
+      "type": "gauge",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(woms_http_request_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "P99",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      }
+    },
+    {
+      "id": 3,
       "title": "HTTP Requests by Status (1 h)",
       "description": "Breakdown of total HTTP requests grouped by status code",
       "type": "piechart",
@@ -265,68 +267,14 @@
       }
     },
     {
-      "id": 5,
-      "title": "HTTP Requests by Method (1 h)",
-      "description": "Breakdown of total HTTP requests grouped by HTTP method",
-      "type": "bargauge",
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 5
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
-      },
-      "targets": [
-        {
-          "expr": "sum by (method) (increase(woms_http_requests_total[1h]))",
-          "legendFormat": "{{method}}",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "color": {
-            "mode": "palette-classic"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "sum"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "horizontal",
-        "displayMode": "gradient",
-        "showUnfilled": true,
-        "text": {}
-      }
-    },
-    {
-      "id": 6,
+      "id": 4,
       "title": "Online Users \u2014 Trend",
       "description": "Historical trend of concurrent online users",
       "type": "timeseries",
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 16,
+        "x": 8,
         "y": 5
       },
       "datasource": {
@@ -371,7 +319,36 @@
       }
     },
     {
-      "id": 7,
+      "id": 10,
+      "title": "Request Latency (Pr95)",
+      "type": "gauge",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(woms_http_request_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "Pr95",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 5
+      },
+      "description": "95th percentile request latency over the last 5 minutes"
+    },
+    {
+      "id": 5,
       "title": "Go Runtime \u2014 Goroutines",
       "description": "Number of goroutines currently running in the WOMS API process",
       "type": "timeseries",
@@ -425,7 +402,7 @@
       }
     },
     {
-      "id": 8,
+      "id": 6,
       "title": "Go Runtime \u2014 Heap Alloc",
       "description": "Bytes of allocated heap objects (live)",
       "type": "timeseries",
@@ -480,220 +457,13 @@
       }
     },
     {
-      "id": 901,
-      "title": "Worker Involuntary Context Switch Rate",
-      "type": "timeseries",
-      "gridPos": {
-        "h": 7,
-        "w": 8,
-        "x": 0,
-        "y": 20
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
-      },
-      "targets": [
-        {
-          "expr": "avg(rate(gthulhu_pod_involuntary_ctx_switches_total{exported_namespace=\"__WOMS_NAMESPACE__\",pod_name=~\"__WOMS_WORKER_REGEX__\"}[2m]))",
-          "legendFormat": "ctx switches/s",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "fillOpacity": 10,
-            "showPoints": "never",
-            "spanNulls": true
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "last",
-            "mean",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "id": 902,
-      "title": "Worker Run Queue Wait Time Rate",
-      "type": "timeseries",
-      "gridPos": {
-        "h": 7,
-        "w": 8,
-        "x": 8,
-        "y": 20
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
-      },
-      "targets": [
-        {
-          "expr": "avg(rate(gthulhu_pod_wait_time_nanoseconds_total{exported_namespace=\"__WOMS_NAMESPACE__\",pod_name=~\"__WOMS_WORKER_REGEX__\"}[2m])) / 1000000000",
-          "legendFormat": "seconds/s",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "fillOpacity": 10,
-            "showPoints": "never",
-            "spanNulls": true
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "last",
-            "mean",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "id": 903,
-      "title": "Tracked Worker Process Count",
-      "type": "timeseries",
-      "gridPos": {
-        "h": 7,
-        "w": 8,
-        "x": 16,
-        "y": 20
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
-      },
-      "targets": [
-        {
-          "expr": "sum(gthulhu_pod_process_count{exported_namespace=\"__WOMS_NAMESPACE__\",pod_name=~\"__WOMS_WORKER_REGEX__\"})",
-          "legendFormat": "processes",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "fillOpacity": 10,
-            "showPoints": "never",
-            "spanNulls": true
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "last",
-            "mean",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "id": 904,
-      "title": "Request Latency (P99)",
-      "type": "gauge",
-      "datasource": "${DS_PROMETHEUS}",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "min": 0
-        }
-      },
-      "targets": [
-        {
-          "expr": "histogram_quantile(0.99, sum(rate(woms_http_request_duration_seconds_bucket[5m])) by (le))",
-          "legendFormat": "P99",
-          "refId": "A"
-        }
-      ],
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 8
-      }
-    },
-    {
-      "id": 905,
-      "title": "Error Rate",
-      "type": "stat",
-      "datasource": "${DS_PROMETHEUS}",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "min": 0,
-          "max": 1
-        }
-      },
-      "targets": [
-        {
-          "expr": "sum(rate(woms_http_requests_total{status=~\"[45].*\"}[5m])) / sum(rate(woms_http_requests_total[5m]))",
-          "legendFormat": "Error Rate",
-          "refId": "A"
-        }
-      ],
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 8
-      }
-    },
-    {
-      "id": 906,
+      "id": 9,
       "title": "System Health (CPU)",
       "type": "timeseries",
-      "datasource": "${DS_PROMETHEUS}",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "short"
@@ -707,10 +477,10 @@
         }
       ],
       "gridPos": {
-        "h": 8,
+        "h": 7,
         "w": 8,
         "x": 16,
-        "y": 8
+        "y": 13
       }
     }
   ],

@@ -289,6 +289,7 @@ monitoring:
   # Grafana deployment with anonymous viewer access for iframe embedding
   grafana:
     enabled: true
+    externalPath: /grafana
     image:
       repository: grafana/grafana
       tag: "10.4.7"
@@ -296,6 +297,8 @@ monitoring:
       anonymousEnabled: "true"
       anonymousOrgRole: Viewer
       allowEmbedding: "true"
+      serveFromSubPath: "true"
+      rootUrl: ""
     resources:
       requests:
         cpu: 50m

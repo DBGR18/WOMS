@@ -11,8 +11,10 @@ const workerDeployment = readFileSync(new URL("./templates/worker-deployment.yam
 const webDeployment = readFileSync(new URL("./templates/web-deployment.yaml", import.meta.url), "utf8");
 const services = readFileSync(new URL("./templates/services.yaml", import.meta.url), "utf8");
 const ingress = readFileSync(new URL("./templates/ingress.yaml", import.meta.url), "utf8");
+const helpers = readFileSync(new URL("./templates/_helpers.tpl", import.meta.url), "utf8");
 const prometheusConfig = readFileSync(new URL("./templates/prometheus-configmap.yaml", import.meta.url), "utf8");
 const grafanaConfig = readFileSync(new URL("./templates/grafana-configmap.yaml", import.meta.url), "utf8");
+const grafanaDeployment = readFileSync(new URL("./templates/grafana-deployment.yaml", import.meta.url), "utf8");
 const gthulhuPsm = readFileSync(new URL("./templates/gthulhu-podschedulingmetrics.yaml", import.meta.url), "utf8");
 const gthulhuOverlay = readFileSync(new URL("./values-gthulhu-monitor.yaml", import.meta.url), "utf8");
 const dashboard = readFileSync(new URL("./dashboards/woms-monitoring.json", import.meta.url), "utf8");
@@ -106,12 +108,6 @@ test("Alan monitoring templates scrape WOMS and Gthulhu metrics", () => {
   assert.match(grafanaConfig, /\.Files\.Glob "dashboards\/\*\.json"/);
   assert.match(grafanaConfig, /replace "__WOMS_NAMESPACE__" \$\.Release\.Namespace/);
   assert.match(grafanaConfig, /replace "__WOMS_WORKER_REGEX__"/);
-  assert.match(dashboard, /Worker Involuntary Context Switch Rate/);
-  assert.match(dashboard, /Worker Run Queue Wait Time Rate/);
-  assert.match(dashboard, /Tracked Worker Process Count/);
-  assert.match(dashboard, /gthulhu_pod_involuntary_ctx_switches_total\{exported_namespace=\\"__WOMS_NAMESPACE__\\",pod_name=~\\"__WOMS_WORKER_REGEX__\\"\}/);
-  assert.match(dashboard, /gthulhu_pod_wait_time_nanoseconds_total\{exported_namespace=\\"__WOMS_NAMESPACE__\\",pod_name=~\\"__WOMS_WORKER_REGEX__\\"\}/);
-  assert.match(dashboard, /gthulhu_pod_process_count\{exported_namespace=\\"__WOMS_NAMESPACE__\\",pod_name=~\\"__WOMS_WORKER_REGEX__\\"\}/);
 });
 
 test("PodSchedulingMetrics selector targets WOMS workers", () => {
@@ -269,6 +265,25 @@ test("Ingress keeps login public while protecting API prefix", () => {
   assert.match(ingress, /name:\s+\{\{ include "woms\.fullname" \. \}\}-api-secure/);
   assert.match(ingress, /nginx\.ingress\.kubernetes\.io\/auth-url/);
   assert.match(ingress, /path:\s+\/api[\s\S]*pathType:\s+Prefix/);
+});
+
+test("Helm exposes Grafana through the web proxy subpath", () => {
+  assert.match(values, /externalPath:\s+\/grafana/);
+  assert.match(values, /serveFromSubPath:\s+"true"/);
+  assert.match(values, /rootUrl:\s+""/);
+  assert.match(helpers, /define "woms\.grafanaRootUrl"/);
+  assert.match(helpers, /define "woms\.externalScheme"/);
+  assert.match(helpers, /define "woms\.grafanaExternalPath"/);
+  assert.match(webDeployment, /name:\s+GRAFANA_UPSTREAM/);
+  assert.match(webDeployment, /value:\s+\{\{ printf "%s-grafana:3000" \(include "woms\.fullname" \.\) \| quote \}\}/);
+  assert.match(grafanaDeployment, /name:\s+GF_SERVER_DOMAIN/);
+  assert.match(grafanaDeployment, /name:\s+GF_SERVER_ROOT_URL/);
+  assert.match(grafanaDeployment, /include "woms\.grafanaRootUrl" \./);
+  assert.match(grafanaDeployment, /name:\s+GF_SERVER_SERVE_FROM_SUB_PATH/);
+  assert.match(grafanaDeployment, /monitoring\.grafana\.env\.serveFromSubPath/);
+  assert.match(grafanaDeployment, /name:\s+GF_SECURITY_COOKIE_SECURE[\s\S]*\.Values\.ingress\.tls\.enabled \| quote/);
+  assert.doesNotMatch(ingress, /path:\s+\/grafana/);
+  assert.doesNotMatch(ingress, /name:\s+\{\{ include "woms\.fullname" \. \}\}-grafana/);
 });
 
 test("Web deployment is runnable without manual securityContext patches", () => {

@@ -85,6 +85,30 @@ test("web nginx proxy preserves API request paths", () => {
   assert.match(compose, /nginx\.compose\.conf\.template:\/etc\/nginx\/templates\/default\.conf\.template:ro/);
 });
 
+test("web nginx proxies Grafana under the local 8081 web URL", () => {
+  const nginx = readFileSync(new URL("./nginx.conf.template", import.meta.url), "utf8");
+  const composeNginx = readFileSync(new URL("./nginx.compose.conf.template", import.meta.url), "utf8");
+  const compose = readFileSync(new URL("../docker-compose.yml", import.meta.url), "utf8");
+  const grafanaLocation = nginx.match(/location \/grafana\/ \{[\s\S]*?\n    \}/)?.[0] ?? "";
+  const appLocation = nginx.match(/location \/ \{[\s\S]*?\n    \}/)?.[0] ?? "";
+
+  assert.match(compose, /"8081:8080"/);
+  assert.doesNotMatch(compose, /"80:8080"/);
+  assert.match(compose, /GRAFANA_UPSTREAM:\s+\$\{GRAFANA_UPSTREAM:-grafana:3000\}/);
+  assert.match(compose, /GF_SERVER_ROOT_URL:\s+http:\/\/localhost:8081\/grafana\//);
+  assert.match(compose, /GF_SERVER_SERVE_FROM_SUB_PATH:\s+"true"/);
+  assert.match(nginx, /map \$http_upgrade \$connection_upgrade \{/);
+  assert.match(nginx, /location = \/grafana \{[\s\S]*return 301 \/grafana\/;/);
+  assert.match(nginx, /location \/grafana\/api\/live\/ \{[\s\S]*proxy_set_header Upgrade \$http_upgrade;[\s\S]*proxy_pass http:\/\/\$\{GRAFANA_UPSTREAM\};/);
+  assert.doesNotMatch(grafanaLocation, /rewrite \^\/grafana\/\(\.\*\) \/\$1 break;/);
+  assert.doesNotMatch(composeNginx, /rewrite \^\/grafana\/\(\.\*\) \/\$1 break;/);
+  assert.match(grafanaLocation, /proxy_pass http:\/\/\$\{GRAFANA_UPSTREAM\};/);
+  assert.doesNotMatch(grafanaLocation, /Content-Security-Policy/);
+  assert.match(appLocation, /Content-Security-Policy/);
+  assert.match(composeNginx, /set \$grafana_upstream http:\/\/\$\{GRAFANA_UPSTREAM\};/);
+  assert.match(composeNginx, /proxy_pass \$grafana_upstream;/);
+});
+
 test("order cards support pointer fallback drag scheduling", () => {
   const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");
   const styles = readFileSync(new URL("./styles.css", import.meta.url), "utf8");

@@ -282,9 +282,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "auth session store unavailable")
 		return
 	}
-	if s.tokenSessions.TracksSessions() {
-		metrics.CurrentOnlineUserCount.Inc()
-	}
+	metrics.CurrentOnlineUserCount.Inc()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"token": token,
 		"user":  user,
@@ -310,9 +308,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if token != "" {
 		s.tokenSessions.Revoke(r.Context(), token)
 	}
-	if s.tokenSessions.TracksSessions() {
-		metrics.CurrentOnlineUserCount.Dec()
-	}
+	metrics.CurrentOnlineUserCount.Dec()
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

@@ -465,6 +465,24 @@ button:hover {
   background: var(--accent-dark);
 }
 
+.monitor-link {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 14px;
+  color: var(--ink);
+  background: #ffffff;
+  text-decoration: none;
+}
+
+.monitor-link:hover {
+  border-color: var(--accent);
+  color: var(--accent-dark);
+}
+
 .secondary-button {
   border: 1px solid var(--line);
   background: #ffffff;
