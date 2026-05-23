@@ -29,7 +29,7 @@
       "type": "stat",
       "gridPos": {
         "h": 5,
-        "w": 4,
+        "w": 6,
         "x": 0,
         "y": 0
       },
@@ -103,7 +103,7 @@
       "gridPos": {
         "h": 5,
         "w": 6,
-        "x": 18,
+        "x": 6,
         "y": 0
       },
       "datasource": {
@@ -158,6 +158,63 @@
         "colorMode": "background",
         "graphMode": "area",
         "justifyMode": "center"
+      }
+    },
+    {
+      "id": 8,
+      "title": "Error Rate",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(woms_http_requests_total{status=~\"[45].*\"}[5m])) / sum(rate(woms_http_requests_total[5m]))",
+          "legendFormat": "Error Rate",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      }
+    },
+    {
+      "id": 7,
+      "title": "Request Latency (P99)",
+      "type": "gauge",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(woms_http_request_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "P99",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 0
       }
     },
     {
@@ -217,7 +274,7 @@
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 16,
+        "x": 8,
         "y": 5
       },
       "datasource": {
@@ -260,6 +317,35 @@
           "mode": "single"
         }
       }
+    },
+    {
+      "id": 10,
+      "title": "Request Latency (Pr95)",
+      "type": "gauge",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(woms_http_request_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "Pr95",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 5
+      },
+      "description": "95th percentile request latency over the last 5 minutes"
     },
     {
       "id": 5,
@@ -371,63 +457,6 @@
       }
     },
     {
-      "id": 7,
-      "title": "Request Latency (P99)",
-      "type": "gauge",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "min": 0
-        }
-      },
-      "targets": [
-        {
-          "expr": "histogram_quantile(0.99, sum(rate(woms_http_request_duration_seconds_bucket[5m])) by (le))",
-          "legendFormat": "P99",
-          "refId": "A"
-        }
-      ],
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 8
-      }
-    },
-    {
-      "id": 8,
-      "title": "Error Rate",
-      "type": "stat",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "min": 0,
-          "max": 1
-        }
-      },
-      "targets": [
-        {
-          "expr": "sum(rate(woms_http_requests_total{status=~\"[45].*\"}[5m])) / sum(rate(woms_http_requests_total[5m]))",
-          "legendFormat": "Error Rate",
-          "refId": "A"
-        }
-      ],
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 8
-      }
-    },
-    {
       "id": 9,
       "title": "System Health (CPU)",
       "type": "timeseries",
@@ -448,10 +477,10 @@
         }
       ],
       "gridPos": {
-        "h": 8,
+        "h": 7,
         "w": 8,
         "x": 16,
-        "y": 8
+        "y": 13
       }
     }
   ],
