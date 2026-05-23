@@ -113,6 +113,7 @@ services:
       dockerfile: Dockerfile.web
     environment:
       API_UPSTREAM: ${API_UPSTREAM:-api:8080}
+      GRAFANA_UPSTREAM: ${GRAFANA_UPSTREAM:-grafana:3000}
     volumes:
       - ./web/nginx.compose.conf.template:/etc/nginx/templates/default.conf.template:ro
     depends_on:
@@ -164,6 +165,9 @@ services:
       GF_SECURITY_ALLOW_EMBEDDING: "true"
       GF_SECURITY_COOKIE_SAMESITE: disabled
       GF_SECURITY_COOKIE_SECURE: "false"
+      GF_SERVER_DOMAIN: localhost
+      GF_SERVER_ROOT_URL: http://localhost:8081/grafana/
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
     volumes:
       - grafana-storage:/var/lib/grafana
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro

@@ -116,6 +116,7 @@ Important settings:
 - `DOCKERHUB_NAMESPACE`: Docker Hub namespace.
 - `WOMS_IMAGE_TAG`: Docker image tag used by Docker Compose. Defaults to `latest` so Compose builds and local runs stay aligned with the Docker Hub `latest` tag.
 - `API_UPSTREAM`: web NGINX upstream for API proxying. Docker Compose sets this to `api:8080`.
+- `GRAFANA_UPSTREAM`: web NGINX upstream for Grafana proxying. Docker Compose sets this to `grafana:3000`; Helm sets it to the in-cluster Grafana service.
 
 GitHub Actions Docker Hub settings:
 
@@ -159,6 +160,8 @@ Default services:
 
 - API: `http://localhost:8080`
 - Web: `http://localhost:8081`
+- Grafana via Web proxy: `http://localhost:8081/grafana`
+- Grafana direct debug port: `http://localhost:3000`
 - PostgreSQL: `localhost:5432`
 - Redis: `localhost:6379`
 - Kafka: `localhost:9092`
@@ -302,7 +305,15 @@ kubectl port-forward svc/woms-woms-web 8081:8080 -n woms
 
 Open `http://127.0.0.1:8081` and log in with `admin` / `demo`.
 
-In Helm/Kubernetes, the web container proxies `/api/` to `API_UPSTREAM`, which the chart sets to `woms-woms-api:8080`. The Kubernetes NGINX template renders that upstream directly and relies on the Pod resolver from Kubernetes; it must not use Docker-only DNS such as `127.0.0.11` in Kubernetes. Docker Compose mounts `web/nginx.compose.conf.template` instead, so local Compose runs can use Docker's embedded resolver and re-resolve the `api` service after the API container is recreated.
+When `ingress.enabled=true` and the host resolves to the NGINX Ingress controller, open Grafana through the same WOMS browser entry point:
+
+```text
+http(s)://<ingress.host>/grafana
+```
+
+No Grafana port-forward is required for the ingress path. The public ingress sends `/grafana` to the web service, and the web NGINX container proxies it to the internal Grafana ClusterIP service. The chart derives `GF_SERVER_ROOT_URL` from `ingress.host`, `ingress.tls.enabled`, and `monitoring.grafana.externalPath`; production deployments can override it with `monitoring.grafana.env.rootUrl`.
+
+In Helm/Kubernetes, the web container proxies `/api/` to `API_UPSTREAM`, which the chart sets to `woms-woms-api:8080`, and proxies `/grafana/` to `GRAFANA_UPSTREAM`, which the chart sets to `woms-woms-grafana:3000`. The Kubernetes NGINX template renders those upstreams directly and relies on the Pod resolver from Kubernetes; it must not use Docker-only DNS such as `127.0.0.11` in Kubernetes. Docker Compose mounts `web/nginx.compose.conf.template` instead, so local Compose runs can use Docker's embedded resolver and re-resolve the `api` and `grafana` services after containers are recreated.
 
 If the browser runs on a Windows host and WOMS runs on VM `192.168.56.101`, create an SSH tunnel from Windows first:
 

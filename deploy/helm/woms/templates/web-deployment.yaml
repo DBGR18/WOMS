@@ -30,6 +30,10 @@ spec:
           env:
             - name: API_UPSTREAM
               value: {{ printf "%s-api:8080" (include "woms.fullname" .) | quote }}
+            {{- if and .Values.monitoring.enabled .Values.monitoring.grafana.enabled }}
+            - name: GRAFANA_UPSTREAM
+              value: {{ printf "%s-grafana:3000" (include "woms.fullname" .) | quote }}
+            {{- end }}
           resources:
             {{- toYaml .Values.web.resources | nindent 12 }}
           securityContext:
