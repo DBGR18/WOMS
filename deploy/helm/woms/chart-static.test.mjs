@@ -110,6 +110,16 @@ test("Alan monitoring templates scrape WOMS and Gthulhu metrics", () => {
   assert.match(grafanaConfig, /replace "__WOMS_WORKER_REGEX__"/);
 });
 
+test("Helm Grafana dashboard aggregates replicated API metrics", () => {
+  assert.doesNotMatch(dashboard, /Online Users/);
+  assert.doesNotMatch(dashboard, /woms_current_online_user_count/);
+  assert.match(dashboard, /Request Latency \(P50\)/);
+  assert.match(dashboard, /histogram_quantile\(0\.50, sum\(rate\(woms_http_request_duration_seconds_bucket\[5m\]\)\) by \(le\)\)/);
+  assert.match(dashboard, /sum\(go_goroutines\{job=\\"woms-api\\"\}\)/);
+  assert.match(dashboard, /sum\(go_memstats_heap_alloc_bytes\{job=\\"woms-api\\"\}\)/);
+  assert.match(dashboard, /sum\(rate\(process_cpu_seconds_total\{job=\\"woms-api\\"\}\[5m\]\)\)/);
+});
+
 test("PodSchedulingMetrics selector targets WOMS workers", () => {
   assert.match(gthulhuPsm, /kind:\s+PodSchedulingMetrics/);
   assert.match(gthulhuPsm, /if and \.Values\.gthulhu\.enabled \.Values\.gthulhu\.podSchedulingMetrics\.enabled/);
