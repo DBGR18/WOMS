@@ -1377,7 +1377,7 @@ func (s *PostgresStore) previewFromDB(req scheduleRequest, claims auth.Claims) (
 	if err != nil {
 		return scheduler.Result{}, previewFromDBResult{}, err
 	}
-	result, err := scheduler.Plan(scheduler.Request{
+	planRequest := scheduler.Request{
 		LineID:              lineID,
 		CapacityPerDay:      line.CapacityPerDay,
 		StartDate:           startDate,
@@ -1387,9 +1387,22 @@ func (s *PostgresStore) previewFromDB(req scheduleRequest, claims auth.Claims) (
 		ManualForce:         req.ManualForce,
 		ForceReason:         req.Reason,
 		AllowLateCompletion: req.AllowLateCompletion,
-	})
+	}
+	var baseline scheduler.Result
+	if req.DraftOrder != nil {
+		baselineRequest := planRequest
+		baselineRequest.Orders = withoutDraftOrderInputs(inputs)
+		baseline, err = scheduler.Plan(baselineRequest)
+		if err != nil {
+			return scheduler.Result{}, previewFromDBResult{}, err
+		}
+	}
+	result, err := scheduler.Plan(planRequest)
 	if err != nil {
 		return scheduler.Result{}, previewFromDBResult{}, err
+	}
+	if req.DraftOrder != nil {
+		result = salesDraftPreviewResult(result, baseline)
 	}
 	if req.DraftOrder == nil {
 		result.Allocations, err = s.splitAllocationOrderIDsDB(result.Allocations)
@@ -1460,14 +1473,44 @@ func (s *PostgresStore) schedulerInputs(req scheduleRequest, claims auth.Claims,
 		if err != nil {
 			return nil, errors.New("dueDate must use YYYY-MM-DD")
 		}
-		return []scheduler.OrderInput{{ID: "PREVIEW-DRAFT", LineID: draft.LineID, Quantity: draft.Quantity, Priority: draft.Priority, DueDate: dueDate}}, nil
+		inputs, err := s.pendingOrderInputs(lineID, nil)
+		if err != nil {
+			return nil, err
+		}
+		// Sales draft previews account for the pending backlog as capacity usage
+		// and return those pending preview allocations for the preview dialog only.
+		// Scheduler previews/jobs do not use this draft branch, so formal scheduling
+		// keeps excluding unrelated pending orders from daily capacity.
+		inputs = append(inputs, scheduler.OrderInput{
+			ID:       previewDraftOrderID,
+			Customer: strings.TrimSpace(draft.Customer),
+			LineID:   draft.LineID,
+			Quantity: draft.Quantity,
+			Priority: draft.Priority,
+			Status:   domain.StatusPending,
+			DueDate:  dueDate,
+		})
+		return inputs, nil
 	}
 	selected := map[string]bool{}
 	for _, id := range req.OrderIDs {
 		selected[id] = true
 	}
+	inputs, err := s.pendingOrderInputs(lineID, selected)
+	if err != nil {
+		return nil, err
+	}
+	resolutionInputs, err := s.resolutionOrderInputs(req.ResolutionOrderIDs, lineID)
+	if err != nil {
+		return nil, err
+	}
+	inputs = append(inputs, resolutionInputs...)
+	return inputs, nil
+}
+
+func (s *PostgresStore) pendingOrderInputs(lineID string, selected map[string]bool) ([]scheduler.OrderInput, error) {
 	rows, err := s.db.Query(`
-		SELECT id, line_id, quantity, priority, due_date
+		SELECT id, customer, line_id, quantity, priority, status, due_date
 		FROM orders
 		WHERE line_id = $1 AND status = '待排程'
 		ORDER BY due_date, id
@@ -1479,7 +1522,7 @@ func (s *PostgresStore) schedulerInputs(req scheduleRequest, claims auth.Claims,
 	inputs := []scheduler.OrderInput{}
 	for rows.Next() {
 		var input scheduler.OrderInput
-		if err := rows.Scan(&input.ID, &input.LineID, &input.Quantity, &input.Priority, &input.DueDate); err != nil {
+		if err := rows.Scan(&input.ID, &input.Customer, &input.LineID, &input.Quantity, &input.Priority, &input.Status, &input.DueDate); err != nil {
 			return nil, err
 		}
 		if len(selected) > 0 && !selected[input.ID] {
@@ -1490,12 +1533,6 @@ func (s *PostgresStore) schedulerInputs(req scheduleRequest, claims auth.Claims,
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-
-	resolutionInputs, err := s.resolutionOrderInputs(req.ResolutionOrderIDs, lineID)
-	if err != nil {
-		return nil, err
-	}
-	inputs = append(inputs, resolutionInputs...)
 	return inputs, nil
 }
 
@@ -1505,7 +1542,7 @@ func (s *PostgresStore) resolutionOrderInputs(resolutionOrderIDs []string, lineI
 		return nil, nil
 	}
 	rows, err := s.db.Query(`
-		SELECT id, line_id, quantity, priority, status, due_date
+		SELECT id, customer, line_id, quantity, priority, status, due_date
 		FROM orders
 		WHERE id = ANY($1)
 	`, pq.Array(ids))
@@ -1518,12 +1555,13 @@ func (s *PostgresStore) resolutionOrderInputs(resolutionOrderIDs []string, lineI
 	found := map[string]bool{}
 	for rows.Next() {
 		var id string
+		var customer string
 		var orderLineID string
 		var quantity int
 		var priority domain.Priority
 		var status string
 		var dueDate time.Time
-		if err := rows.Scan(&id, &orderLineID, &quantity, &priority, &status, &dueDate); err != nil {
+		if err := rows.Scan(&id, &customer, &orderLineID, &quantity, &priority, &status, &dueDate); err != nil {
 			return nil, err
 		}
 		if orderLineID != lineID {
@@ -1540,9 +1578,11 @@ func (s *PostgresStore) resolutionOrderInputs(resolutionOrderIDs []string, lineI
 		}
 		inputs = append(inputs, scheduler.OrderInput{
 			ID:       id,
+			Customer: customer,
 			LineID:   orderLineID,
 			Quantity: quantity,
 			Priority: priority,
+			Status:   domain.OrderStatus(status),
 			DueDate:  dueDate,
 		})
 		found[id] = true
