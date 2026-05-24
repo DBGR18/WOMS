@@ -1808,6 +1808,49 @@ func TestSchedulerRejectsPendingOrdersAndSalesCanResubmit(t *testing.T) {
 	}
 }
 
+func TestSalesCanResubmitOwnPendingOrder(t *testing.T) {
+	store := NewMemoryStore()
+	server := NewServer("secret", store)
+	salesToken := login(t, server, "sales", "demo")
+	createOrder(t, server, salesToken, "A")
+
+	body := bytes.NewBufferString(`{"orderId":"ORD-0000001","dueDate":"2026-05-05","quantity":2000}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/orders/resubmit", body)
+	req.Header.Set("Authorization", "Bearer "+salesToken)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("resubmit pending failed: %d %s", res.Code, res.Body.String())
+	}
+	if store.orders["ORD-0000001"].Status != domain.StatusPending {
+		t.Fatalf("expected pending order to stay pending, got %+v", store.orders["ORD-0000001"])
+	}
+	if store.orders["ORD-0000001"].Quantity != 2000 || store.orders["ORD-0000001"].DueDate.Format(dateLayout) != "2026-05-05" {
+		t.Fatalf("expected sales edits to persist, got %+v", store.orders["ORD-0000001"])
+	}
+}
+
+func TestSalesCanCancelOwnPendingOrder(t *testing.T) {
+	store := NewMemoryStore()
+	server := NewServer("secret", store)
+	salesToken := login(t, server, "sales", "demo")
+	createOrder(t, server, salesToken, "A")
+
+	body := bytes.NewBufferString(`{"orderIds":["ORD-0000001"]}`)
+	req := httptest.NewRequest(http.MethodDelete, "/api/orders", body)
+	req.Header.Set("Authorization", "Bearer "+salesToken)
+	res := httptest.NewRecorder()
+	server.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("cancel pending failed: %d %s", res.Code, res.Body.String())
+	}
+	if store.orders["ORD-0000001"].Status != domain.StatusCancelled {
+		t.Fatalf("expected pending order to be cancelled, got %+v", store.orders["ORD-0000001"])
+	}
+}
+
 func TestSalesResubmitRejectsTodayOrPastDueDate(t *testing.T) {
 	store := NewMemoryStore()
 	server := NewServer("secret", store)

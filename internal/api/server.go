@@ -416,7 +416,7 @@ func (s *Server) handleResubmitOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if claims.Role != domain.RoleSales {
-		writeError(w, http.StatusForbidden, "only sales can resubmit rejected orders")
+		writeError(w, http.StatusForbidden, "only sales can resubmit pending or rejected orders")
 		return
 	}
 	var req resubmitOrderRequest
@@ -856,6 +856,14 @@ type resubmitOrderRequest struct {
 	Note     string `json:"note"`
 }
 
+func canSalesResubmitStatus(status domain.OrderStatus) bool {
+	return status == domain.StatusPending || status == domain.StatusRejected
+}
+
+func canSalesCancelStatus(status domain.OrderStatus) bool {
+	return status == domain.StatusPending || status == domain.StatusRejected
+}
+
 type assignUserRequest struct {
 	Username string      `json:"username"`
 	Role     domain.Role `json:"role"`
@@ -1096,8 +1104,8 @@ func (s *MemoryStore) ResubmitOrder(req resubmitOrderRequest, claims auth.Claims
 	if order.CreatedBy != claims.Subject {
 		return domain.Order{}, errors.New("sales can resubmit only their own orders")
 	}
-	if order.Status != domain.StatusRejected {
-		return domain.Order{}, errors.New("only rejected orders can be resubmitted")
+	if !canSalesResubmitStatus(order.Status) {
+		return domain.Order{}, errors.New("only pending or rejected orders can be resubmitted")
 	}
 	if strings.TrimSpace(req.Note) != "" {
 		return domain.Order{}, errors.New("note cannot be updated after order creation")
@@ -1173,8 +1181,8 @@ func (s *MemoryStore) CancelOrders(req cancelOrdersRequest, claims auth.Claims) 
 			if order.CreatedBy != claims.Subject {
 				return cancelOrdersResponse{}, errors.New("sales can cancel only their own orders")
 			}
-			if order.Status != domain.StatusRejected {
-				return cancelOrdersResponse{}, errors.New("sales can cancel only rejected orders")
+			if !canSalesCancelStatus(order.Status) {
+				return cancelOrdersResponse{}, errors.New("sales can cancel only pending or rejected orders")
 			}
 		}
 		if claims.Role == domain.RoleScheduler && order.LineID != claims.LineID {
@@ -2981,7 +2989,7 @@ func zhUserMessage(message string) string {
 		"only sales can create orders":                                         "只有業務可以建立訂單。",
 		"only sales can confirm preview orders":                                "只有業務可以確認訂單預覽。",
 		"only schedulers can reject orders":                                    "只有排程工程師可以駁回訂單。",
-		"only sales can resubmit rejected orders":                              "只有業務可以重新送出被駁回的訂單。",
+		"only sales can resubmit pending or rejected orders":                   "只有業務可以重新送出待排程或需業務處理的訂單。",
 		"only admin can manage accounts":                                       "只有管理員可以管理帳號。",
 		"only admin or schedulers can create demo conflict orders":             "只有管理員或排程工程師可以建立衝突展示訂單。",
 		"only schedulers can create schedule jobs":                             "只有排程工程師可以建立排程任務。",
@@ -3004,9 +3012,9 @@ func zhUserMessage(message string) string {
 		"cannot reject another production line":                                "不能駁回其他產線的訂單。",
 		"only pending orders can be rejected":                                  "只有待排程訂單可以被駁回。",
 		"sales can resubmit only their own orders":                             "只能重新送出自己的訂單。",
-		"only rejected orders can be resubmitted":                              "只有需業務處理的訂單可以重新送出。",
+		"only pending or rejected orders can be resubmitted":                   "只有待排程或需業務處理的訂單可以重新送出。",
 		"sales can cancel only their own orders":                               "業務只能取消自己的訂單。",
-		"sales can cancel only rejected orders":                                "業務只能取消需業務處理的訂單。",
+		"sales can cancel only pending or rejected orders":                     "業務只能取消待排程或需業務處理的訂單。",
 		"cannot cancel another production line":                                "不能取消其他產線的訂單。",
 		"role cannot cancel orders":                                            "此角色不能取消訂單。",
 		"cannot cancel in-progress or completed orders":                        "不能取消生產中或已完成的訂單。",

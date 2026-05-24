@@ -68,6 +68,22 @@ test("scheduler panel starts collapsed behind an explicit toggle", () => {
   assert.match(styles, /body\[data-role="scheduler"\]\[data-scheduler-panel-open="false"\] \.layout/);
 });
 
+test("sales pending order edits are isolated from scheduler pending cards", () => {
+  const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");
+  const styles = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
+  const orderActionStart = app.indexOf("function renderOrderAction(order)");
+  const orderActionEnd = app.indexOf("async function handleOrderAction", orderActionStart);
+  const orderAction = app.slice(orderActionStart, orderActionEnd);
+
+  assert.match(app, /function canSalesEditPendingOrder\(order\) \{\n\s+return state\.user\?\.role === "sales" && order\?\.status === "待排程" && order\.createdBy === state\.user\.id;/);
+  assert.match(orderAction, /data-order-action="toggle-sales-pending-edit"/);
+  assert.match(orderAction, /aria-expanded="\$\{expanded \? "true" : "false"\}"/);
+  assert.match(orderAction, /修改：業務修改/);
+  assert.match(orderAction, /deleteLabel: "刪除訂單"/);
+  assert.match(orderAction, /if \(order\.status === "待排程"\) \{\n\s+return `<span class="row-hint">可拖曳到月曆<\/span>`;/);
+  assert.match(styles, /\.sales-pending-toggle\s*\{/);
+});
+
 test("web nginx proxy preserves API request paths", () => {
   const nginx = readFileSync(new URL("./nginx.conf.template", import.meta.url), "utf8");
   // const composeNginx = readFileSync(new URL("./nginx.compose.conf.template", import.meta.url), "utf8");
