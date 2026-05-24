@@ -46,3 +46,11 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- printf "%s://%s%s/" (include "woms.externalScheme" .) .Values.ingress.host (include "woms.grafanaExternalPath" .) -}}
 {{- end -}}
 {{- end -}}
+
+{{- define "woms.grafanaAdminSecretName" -}}
+{{- if .Values.monitoring.grafana.admin.existingSecret -}}
+{{- .Values.monitoring.grafana.admin.existingSecret -}}
+{{- else -}}
+{{- printf "%s-grafana-admin" (include "woms.fullname" .) -}}
+{{- end -}}
+{{- end -}}

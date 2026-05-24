@@ -86,6 +86,7 @@ Expected:
 - API health: `curl http://localhost:8080/healthz`
 - Web: `http://localhost:8081`
 - Grafana through Web proxy: `http://localhost:8081/grafana`
+- Grafana without a session shows the Grafana login page before any dashboard is visible.
 
 ## 4. Helm Render Verification
 
@@ -100,6 +101,8 @@ Expected output includes:
 - `Deployment`: api, worker, web.
 - Web deployment env `GRAFANA_UPSTREAM=woms-woms-grafana:3000`.
 - Grafana deployment env `GF_SERVER_ROOT_URL=http://woms.local/grafana/` and `GF_SERVER_SERVE_FROM_SUB_PATH=true` when rendered with ingress host `woms.local`.
+- Grafana deployment env `GF_AUTH_ANONYMOUS_ENABLED=false`.
+- Grafana admin credentials are sourced from a Secret.
 - `Ingress`: public, api-secure.
 - `ScaledObject`: worker Kafka/CPU triggers.
 - `ScaledObject.spec.advanced.horizontalPodAutoscalerConfig.name`: `woms-woms-worker-hpa`.
@@ -120,7 +123,7 @@ Expected:
 - Valid token passes Ingress auth.
 - API still performs its own JWT/RBAC checks.
 - HTTP redirects to HTTPS.
-- Grafana loads through `http(s)://woms.local/grafana` without a separate Grafana port-forward, and browser requests stay under `/grafana/api/...`.
+- Grafana loads through `http(s)://woms.local/grafana` without a separate Grafana port-forward, browser requests stay under `/grafana/api/...`, and unauthenticated users see Grafana login instead of dashboards.
 
 ## 6. KEDA / HPA Verification
 

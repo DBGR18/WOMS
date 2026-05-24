@@ -15,6 +15,7 @@ const helpers = readFileSync(new URL("./templates/_helpers.tpl", import.meta.url
 const prometheusConfig = readFileSync(new URL("./templates/prometheus-configmap.yaml", import.meta.url), "utf8");
 const grafanaConfig = readFileSync(new URL("./templates/grafana-configmap.yaml", import.meta.url), "utf8");
 const grafanaDeployment = readFileSync(new URL("./templates/grafana-deployment.yaml", import.meta.url), "utf8");
+const grafanaSecret = readFileSync(new URL("./templates/grafana-secret.yaml", import.meta.url), "utf8");
 const gthulhuPsm = readFileSync(new URL("./templates/gthulhu-podschedulingmetrics.yaml", import.meta.url), "utf8");
 const gthulhuOverlay = readFileSync(new URL("./values-gthulhu-monitor.yaml", import.meta.url), "utf8");
 const dashboard = readFileSync(new URL("./dashboards/woms-monitoring.json", import.meta.url), "utf8");
@@ -294,6 +295,25 @@ test("Helm exposes Grafana through the web proxy subpath", () => {
   assert.match(grafanaDeployment, /name:\s+GF_SECURITY_COOKIE_SECURE[\s\S]*\.Values\.ingress\.tls\.enabled \| quote/);
   assert.doesNotMatch(ingress, /path:\s+\/grafana/);
   assert.doesNotMatch(ingress, /name:\s+\{\{ include "woms\.fullname" \. \}\}-grafana/);
+});
+
+test("Helm Grafana defaults require authentication before dashboard viewing", () => {
+  assert.match(values, /anonymousEnabled:\s+"false"/);
+  assert.match(values, /allowEmbedding:\s+"false"/);
+  assert.match(values, /usersAllowSignUp:\s+"false"/);
+  assert.match(values, /cookieSameSite:\s+lax/);
+  assert.match(values, /admin:[\s\S]*existingSecret:\s+""/);
+  assert.match(values, /admin:[\s\S]*userKey:\s+admin-user/);
+  assert.match(values, /admin:[\s\S]*passwordKey:\s+admin-password/);
+  assert.match(helpers, /define "woms\.grafanaAdminSecretName"/);
+  assert.match(grafanaSecret, /kind:\s+Secret/);
+  assert.match(grafanaSecret, /not \.Values\.monitoring\.grafana\.admin\.existingSecret/);
+  assert.match(grafanaSecret, /randAlphaNum 32/);
+  assert.match(grafanaDeployment, /name:\s+GF_AUTH_ANONYMOUS_ENABLED[\s\S]*monitoring\.grafana\.env\.anonymousEnabled/);
+  assert.match(grafanaDeployment, /if \$anonymousEnabled[\s\S]*name:\s+GF_AUTH_ANONYMOUS_ORG_ROLE/);
+  assert.match(grafanaDeployment, /name:\s+GF_SECURITY_ADMIN_USER[\s\S]*secretKeyRef:[\s\S]*include "woms\.grafanaAdminSecretName"/);
+  assert.match(grafanaDeployment, /name:\s+GF_SECURITY_ADMIN_PASSWORD[\s\S]*secretKeyRef:[\s\S]*monitoring\.grafana\.admin\.passwordKey/);
+  assert.match(grafanaDeployment, /name:\s+GF_USERS_ALLOW_SIGN_UP[\s\S]*monitoring\.grafana\.env\.usersAllowSignUp/);
 });
 
 test("Web deployment is runnable without manual securityContext patches", () => {
