@@ -156,14 +156,16 @@ services:
     ports:
       - "9090:9090"
 
-  # Grafana: dashboards with anonymous read-only access for iframe embed
+  # Grafana: dashboards require Grafana authentication before viewing
   grafana:
     image: grafana/grafana:11.1.0
     environment:
-      GF_AUTH_ANONYMOUS_ENABLED: "true"
-      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
-      GF_SECURITY_ALLOW_EMBEDDING: "true"
-      GF_SECURITY_COOKIE_SAMESITE: disabled
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD before starting Grafana}"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SECURITY_ALLOW_EMBEDDING: "false"
+      GF_SECURITY_COOKIE_SAMESITE: lax
       GF_SECURITY_COOKIE_SECURE: "false"
       GF_SERVER_DOMAIN: localhost
       GF_SERVER_ROOT_URL: http://localhost:8081/grafana/

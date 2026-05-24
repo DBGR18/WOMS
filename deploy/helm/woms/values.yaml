@@ -286,17 +286,25 @@ monitoring:
         port: "9090"
         interval: 15s
 
-  # Grafana deployment with anonymous viewer access for iframe embedding
+  # Grafana deployment requires Grafana authentication before dashboard viewing.
   grafana:
     enabled: true
     externalPath: /grafana
     image:
       repository: grafana/grafana
       tag: "10.4.7"
+    admin:
+      existingSecret: ""
+      user: admin
+      userKey: admin-user
+      password: ""
+      passwordKey: admin-password
     env:
-      anonymousEnabled: "true"
+      anonymousEnabled: "false"
       anonymousOrgRole: Viewer
-      allowEmbedding: "true"
+      allowEmbedding: "false"
+      usersAllowSignUp: "false"
+      cookieSameSite: lax
       serveFromSubPath: "true"
       rootUrl: ""
     resources:

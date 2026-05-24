@@ -111,6 +111,12 @@ test("web nginx proxies Grafana under the local 8081 web URL", () => {
   assert.match(compose, /"8081:8080"/);
   assert.doesNotMatch(compose, /"80:8080"/);
   assert.match(compose, /GRAFANA_UPSTREAM:\s+\$\{GRAFANA_UPSTREAM:-grafana:3000\}/);
+  assert.match(compose, /GF_AUTH_ANONYMOUS_ENABLED:\s+"false"/);
+  assert.doesNotMatch(compose, /GF_AUTH_ANONYMOUS_ENABLED:\s+"true"/);
+  assert.match(compose, /GF_SECURITY_ADMIN_USER:\s+\$\{GRAFANA_ADMIN_USER:-admin\}/);
+  assert.match(compose, /GF_SECURITY_ADMIN_PASSWORD:\s+"\$\{GRAFANA_ADMIN_PASSWORD:\?Set GRAFANA_ADMIN_PASSWORD before starting Grafana\}"/);
+  assert.match(compose, /GF_USERS_ALLOW_SIGN_UP:\s+"false"/);
+  assert.match(compose, /GF_SECURITY_ALLOW_EMBEDDING:\s+"false"/);
   assert.match(compose, /GF_SERVER_ROOT_URL:\s+http:\/\/localhost:8081\/grafana\//);
   assert.match(compose, /GF_SERVER_SERVE_FROM_SUB_PATH:\s+"true"/);
   assert.match(nginx, /map \$http_upgrade \$connection_upgrade \{/);

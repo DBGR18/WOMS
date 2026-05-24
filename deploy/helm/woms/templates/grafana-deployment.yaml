@@ -1,4 +1,5 @@
 {{- if and .Values.monitoring.enabled .Values.monitoring.grafana.enabled }}
+{{- $anonymousEnabled := eq (toString .Values.monitoring.grafana.env.anonymousEnabled) "true" }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -28,8 +29,22 @@ spec:
           env:
             - name: GF_AUTH_ANONYMOUS_ENABLED
               value: {{ .Values.monitoring.grafana.env.anonymousEnabled | quote }}
+            {{- if $anonymousEnabled }}
             - name: GF_AUTH_ANONYMOUS_ORG_ROLE
               value: {{ .Values.monitoring.grafana.env.anonymousOrgRole | quote }}
+            {{- end }}
+            - name: GF_SECURITY_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "woms.grafanaAdminSecretName" . | quote }}
+                  key: {{ .Values.monitoring.grafana.admin.userKey | quote }}
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "woms.grafanaAdminSecretName" . | quote }}
+                  key: {{ .Values.monitoring.grafana.admin.passwordKey | quote }}
+            - name: GF_USERS_ALLOW_SIGN_UP
+              value: {{ .Values.monitoring.grafana.env.usersAllowSignUp | quote }}
             - name: GF_SECURITY_ALLOW_EMBEDDING
               value: {{ .Values.monitoring.grafana.env.allowEmbedding | quote }}
             - name: GF_SERVER_DOMAIN
@@ -39,7 +54,7 @@ spec:
             - name: GF_SERVER_SERVE_FROM_SUB_PATH
               value: {{ .Values.monitoring.grafana.env.serveFromSubPath | quote }}
             - name: GF_SECURITY_COOKIE_SAMESITE
-              value: disabled
+              value: {{ .Values.monitoring.grafana.env.cookieSameSite | quote }}
             - name: GF_SECURITY_COOKIE_SECURE
               value: {{ .Values.ingress.tls.enabled | quote }}
           volumeMounts:

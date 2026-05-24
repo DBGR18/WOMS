@@ -18,6 +18,7 @@ coverage.out
 docker-compose.override.yml
 docker-data/
 volumes/
+grafana-storage/
 
 # Kubernetes and Helm local state
 kubeconfig*

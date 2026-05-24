@@ -117,6 +117,7 @@ Important settings:
 - `WOMS_IMAGE_TAG`: Docker image tag used by Docker Compose. Defaults to `latest` so Compose builds and local runs stay aligned with the Docker Hub `latest` tag.
 - `API_UPSTREAM`: web NGINX upstream for API proxying. Docker Compose sets this to `api:8080`.
 - `GRAFANA_UPSTREAM`: web NGINX upstream for Grafana proxying. Docker Compose sets this to `grafana:3000`; Helm sets it to the in-cluster Grafana service.
+- `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD`: local Docker Compose Grafana credentials. Grafana anonymous access is disabled, so users must sign in before viewing monitoring dashboards.
 
 GitHub Actions Docker Hub settings:
 
@@ -165,6 +166,13 @@ Default services:
 - PostgreSQL: `localhost:5432`
 - Redis: `localhost:6379`
 - Kafka: `localhost:9092`
+
+Grafana security:
+
+- Anonymous Grafana dashboard viewing is disabled.
+- Set `GRAFANA_ADMIN_PASSWORD` before running Docker Compose, or copy `.env.example` to `.env` and replace the sample local password.
+- Open `http://localhost:8081/grafana/` and sign in with `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD` before viewing monitoring dashboards.
+- Existing `grafana-storage` volumes keep their original Grafana admin password; reset the password or recreate the local volume if a previous run initialized Grafana with different credentials.
 
 Frontend behavior:
 
@@ -315,6 +323,8 @@ http(s)://<ingress.host>/grafana
 No Grafana port-forward is required for the ingress path. The public ingress sends `/grafana` to the web service, and the web NGINX container proxies it to the internal Grafana ClusterIP service. The chart derives `GF_SERVER_ROOT_URL` from `ingress.host`, `ingress.tls.enabled`, and `monitoring.grafana.externalPath`; production deployments can override it with `monitoring.grafana.env.rootUrl`.
 
 In Helm/Kubernetes, the web container proxies `/api/` to `API_UPSTREAM`, which the chart sets to `woms-woms-api:8080`, and proxies `/grafana/` to `GRAFANA_UPSTREAM`, which the chart sets to `woms-woms-grafana:3000`. The Kubernetes NGINX template renders those upstreams directly and relies on the Pod resolver from Kubernetes; it must not use Docker-only DNS such as `127.0.0.11` in Kubernetes. Docker Compose mounts `web/nginx.compose.conf.template` instead, so local Compose runs can use Docker's embedded resolver and re-resolve the `api` and `grafana` services after containers are recreated.
+
+Grafana anonymous access is disabled in Helm. The chart creates a `woms-woms-grafana-admin` Secret with a generated password when `monitoring.grafana.admin.existingSecret` is empty. Production deployments should create their own Secret and set `monitoring.grafana.admin.existingSecret`, `monitoring.grafana.admin.userKey`, and `monitoring.grafana.admin.passwordKey`. Users must sign in to Grafana before they can observe monitoring dashboards. For the generated default Secret, retrieve the password with `kubectl get secret woms-woms-grafana-admin -n woms -o jsonpath='{.data.admin-password}' | base64 -d`.
 
 If the browser runs on a Windows host and WOMS runs on VM `192.168.56.101`, create an SSH tunnel from Windows first:
 
