@@ -326,8 +326,8 @@ func (s *PostgresStore) ResubmitOrder(req resubmitOrderRequest, claims auth.Clai
 	if order.CreatedBy != claims.Subject {
 		return domain.Order{}, errors.New("sales can resubmit only their own orders")
 	}
-	if order.Status != domain.StatusRejected {
-		return domain.Order{}, errors.New("only rejected orders can be resubmitted")
+	if !canSalesResubmitStatus(order.Status) {
+		return domain.Order{}, errors.New("only pending or rejected orders can be resubmitted")
 	}
 	if strings.TrimSpace(req.Note) != "" {
 		return domain.Order{}, errors.New("note cannot be updated after order creation")
@@ -467,8 +467,8 @@ func (s *PostgresStore) CancelOrders(req cancelOrdersRequest, claims auth.Claims
 			if order.CreatedBy != claims.Subject {
 				return cancelOrdersResponse{}, errors.New("sales can cancel only their own orders")
 			}
-			if order.Status != domain.StatusRejected {
-				return cancelOrdersResponse{}, errors.New("sales can cancel only rejected orders")
+			if !canSalesCancelStatus(order.Status) {
+				return cancelOrdersResponse{}, errors.New("sales can cancel only pending or rejected orders")
 			}
 		}
 		if claims.Role == domain.RoleScheduler && order.LineID != claims.LineID {

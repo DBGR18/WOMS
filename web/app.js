@@ -52,6 +52,7 @@ const state = {
   rejectOrderIds: [],
   schedulerPanelOpen: false,
   selectedOrderIds: new Set(),
+  expandedSalesPendingOrderIds: new Set(),
   mobileView: "orders",
   selectedLine: localStorage.getItem("woms.selectedLine") || defaultLine(fallbackLines),
   filters: {
@@ -549,6 +550,10 @@ async function loadOrders() {
   const payload = await request("/api/orders");
   state.orders = payload.orders ?? [];
   state.selectedOrderIds = new Set(Array.from(state.selectedOrderIds).filter((id) => selectableOrders().some((order) => order.id === id)));
+  state.expandedSalesPendingOrderIds = new Set(Array.from(state.expandedSalesPendingOrderIds).filter((id) => {
+    const order = state.orders.find((item) => item.id === id);
+    return canSalesEditPendingOrder(order);
+  }));
   renderFilters();
   renderStatusSidebar();
   renderOrders();
@@ -807,8 +812,10 @@ function renderOrders() {
 function renderOrderCard(order) {
   const selected = state.selectedOrderIds.has(order.id);
   const selectable = state.user?.role === "scheduler" && order.status === "待排程";
+  const salesPendingEditable = canSalesEditPendingOrder(order);
+  const salesPendingExpanded = salesPendingEditable && state.expandedSalesPendingOrderIds.has(order.id);
   const card = document.createElement("article");
-  card.className = `order-card ${selectable ? "selectable" : ""} ${selected ? "selected" : ""}`;
+  card.className = `order-card ${selectable ? "selectable" : ""} ${selected ? "selected" : ""} ${salesPendingExpanded ? "editing" : ""}`;
   card.dataset.orderId = order.id;
   card.draggable = selectable;
   card.innerHTML = `
@@ -1488,23 +1495,26 @@ function handleCalendarOrderClick(orderId, productionDate = "") {
 
 function renderOrderAction(order) {
   if (state.user?.role === "sales" && order.status === "需業務處理") {
+    return renderSalesCorrectionForm(order, {
+      deleteLabel: "取消訂單",
+    });
+  }
+  if (canSalesEditPendingOrder(order)) {
+    const expanded = state.expandedSalesPendingOrderIds.has(order.id);
     return `
-      <div class="drawer-actions">
-        <label>
-          <span>交期</span>
-          <input data-resubmit-field="dueDate" type="date" onclick="this.showPicker()" min="${tomorrowDateInputValue()}" value="${dateOnly(order.dueDate)}">
-        </label>
-        <label>
-          <span>數量</span>
-          <input data-resubmit-field="quantity" type="number" min="25" max="2500" step="25" value="${order.quantity}">
-        </label>
-        <label>
-          <span>原備註</span>
-          <span class="drawer-note">${escapeHtml(order.note || "未填寫")}</span>
-        </label>
-        <button class="row-action" data-order-action="resubmit-order" data-order-id="${escapeHtml(order.id)}" type="button">重新送出</button>
-        <button class="row-action danger-button" data-order-action="cancel-order" data-order-id="${escapeHtml(order.id)}" type="button">取消訂單</button>
-      </div>
+      ${expanded ? renderSalesCorrectionForm(order, {
+        deleteLabel: "刪除訂單",
+        contextLabel: "修改：業務修改",
+      }) : ""}
+      <button
+        class="sales-pending-toggle"
+        data-order-action="toggle-sales-pending-edit"
+        data-order-id="${escapeHtml(order.id)}"
+        type="button"
+        aria-expanded="${expanded ? "true" : "false"}"
+        aria-label="${expanded ? "收合修改訂單" : "展開修改訂單"}"
+        title="${expanded ? "收合修改訂單" : "展開修改訂單"}"
+      >${expanded ? "▴" : "▾"}</button>
     `;
   }
   if (state.user?.role !== "scheduler") {
@@ -1522,8 +1532,45 @@ function renderOrderAction(order) {
   return "";
 }
 
+function canSalesEditPendingOrder(order) {
+  return state.user?.role === "sales" && order?.status === "待排程" && order.createdBy === state.user.id;
+}
+
+function renderSalesCorrectionForm(order, options = {}) {
+  const contextLabel = options.contextLabel ? `<p class="modification-reason">${escapeHtml(options.contextLabel)}</p>` : "";
+  const deleteLabel = options.deleteLabel ?? "取消訂單";
+  return `
+    <div class="drawer-actions">
+      ${contextLabel}
+      <label>
+        <span>交期</span>
+        <input data-resubmit-field="dueDate" type="date" onclick="this.showPicker()" min="${tomorrowDateInputValue()}" value="${dateOnly(order.dueDate)}">
+      </label>
+      <label>
+        <span>數量</span>
+        <input data-resubmit-field="quantity" type="number" min="25" max="2500" step="25" value="${order.quantity}">
+      </label>
+      <label>
+        <span>原備註</span>
+        <span class="drawer-note">${escapeHtml(order.note || "未填寫")}</span>
+      </label>
+      <button class="row-action" data-order-action="resubmit-order" data-order-id="${escapeHtml(order.id)}" type="button">重新送出</button>
+      <button class="row-action danger-button" data-order-action="cancel-order" data-order-id="${escapeHtml(order.id)}" type="button">${escapeHtml(deleteLabel)}</button>
+    </div>
+  `;
+}
+
 async function handleOrderAction(action, orderId, productionDate = "") {
   try {
+    if (action === "toggle-sales-pending-edit") {
+      if (state.expandedSalesPendingOrderIds.has(orderId)) {
+        state.expandedSalesPendingOrderIds.delete(orderId);
+      } else {
+        state.expandedSalesPendingOrderIds.add(orderId);
+      }
+      renderOrders();
+      return;
+    }
     if (action === "resubmit-order") {
       const card = document.querySelector(`[data-order-id="${cssEscape(orderId)}"]`);
       const dueDate = card?.querySelector('[data-resubmit-field="dueDate"]')?.value;
@@ -1533,6 +1580,7 @@ async function handleOrderAction(action, orderId, productionDate = "") {
         method: "POST",
         body: JSON.stringify({ orderId, dueDate, quantity }),
       });
+      state.expandedSalesPendingOrderIds.delete(orderId);
       showMessage("已重新送出", `${orderId} 已回到待排程。`);
       await refreshWorkspace();
       return;
@@ -1542,6 +1590,7 @@ async function handleOrderAction(action, orderId, productionDate = "") {
         method: "DELETE",
         body: JSON.stringify({ orderIds: [orderId] }),
       });
+      state.expandedSalesPendingOrderIds.delete(orderId);
       showMessage("取消完成", `已取消 ${payload.cancelledOrderIds?.length ?? 0} 張訂單。`);
       await refreshWorkspace();
       return;
@@ -1955,6 +2004,7 @@ function clearSession() {
   state.hpaPeak = null;
   state.productionOrderId = "";
   state.selectedOrderIds.clear();
+  state.expandedSalesPendingOrderIds.clear();
   localStorage.removeItem("woms.token");
   localStorage.removeItem("woms.user");
   syncHPAPeakPolling();

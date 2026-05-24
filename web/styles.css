@@ -534,6 +534,10 @@ button:hover {
   background: #fff8eb;
 }
 
+.order-card.editing {
+  border-color: #8cc6c3;
+}
+
 .order-card.dragging {
   opacity: 0.72;
 }
@@ -597,6 +601,32 @@ button:hover {
 
 .rejection-reason {
   color: #912018;
+}
+
+.modification-reason {
+  margin: 0;
+  color: var(--accent-dark);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.sales-pending-toggle {
+  justify-self: end;
+  width: 34px;
+  min-width: 34px;
+  min-height: 30px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1;
+}
+
+.sales-pending-toggle:hover {
+  border-color: var(--accent);
+  background: #f8fbfb;
 }
 
 .compact-list {
