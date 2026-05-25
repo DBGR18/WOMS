@@ -32,16 +32,12 @@ export function customerFilterValues(orders, filters) {
 
 export function sortOrdersForWorkstation(orders) {
   return [...orders].sort((a, b) => {
-    const statusDelta = orderStatusRank(a.status) - orderStatusRank(b.status);
-    if (statusDelta !== 0) {
-      return statusDelta;
+    if (a.priority !== b.priority) {
+      return a.priority === "high" ? -1 : 1;
     }
     const dueDelta = dateValue(a.dueDate) - dateValue(b.dueDate);
     if (dueDelta !== 0) {
       return dueDelta;
-    }
-    if (a.priority !== b.priority) {
-      return a.priority === "high" ? -1 : 1;
     }
     return naturalOrderNumber(a.id) - naturalOrderNumber(b.id) || String(a.id).localeCompare(String(b.id));
   });

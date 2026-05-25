@@ -251,7 +251,7 @@ test("customerFilterValues follows the active exact filters except customer", ()
   }), ["ACME"]);
 });
 
-test("sortOrdersForWorkstation sorts by workflow, due date, and natural order number", () => {
+test("sortOrdersForWorkstation sorts by priority, due date, and natural order number", () => {
   const orders = [
     { id: "ORD-0000010", status: "待排程", dueDate: "2026-04-30", priority: "low" },
     { id: "ORD-0000002", status: "已排程", dueDate: "2026-05-04", priority: "low" },
@@ -259,7 +259,7 @@ test("sortOrdersForWorkstation sorts by workflow, due date, and natural order nu
     { id: "ORD-0000001", status: "已完成", dueDate: "2026-04-29", priority: "high" },
     { id: "ORD-0000006", status: "待排程", dueDate: "2026-04-30", priority: "low" },
   ];
-  assert.deepEqual(sortOrdersForWorkstation(orders).map((item) => item.id), ["ORD-0000006", "ORD-0000007", "ORD-0000010", "ORD-0000002", "ORD-0000001"]);
+  assert.deepEqual(sortOrdersForWorkstation(orders).map((item) => item.id), ["ORD-0000001", "ORD-0000006", "ORD-0000007", "ORD-0000010", "ORD-0000002"]);
 });
 
 test("uniqueValues and statusCounts provide sidebar/filter data", () => {

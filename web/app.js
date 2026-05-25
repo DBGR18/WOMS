@@ -1259,48 +1259,10 @@ function closePreviewPage() {
   renderCalendar();
 }
 
-function buildPreviewConflictList(conflicts, allocations) {
-  if (state.preview?.kind !== "schedule" || conflicts.length === 0) {
-    return conflicts;
-  }
-  const selectedOrderIds = Array.from(new Set(state.preview?.request?.orderIds ?? []));
-  if (selectedOrderIds.length === 0) {
-    return conflicts;
-  }
-  const conflictById = new Map(conflicts.map((conflict) => [conflict.orderId, conflict]));
-  const latestByOrder = new Map();
-  for (const allocation of allocations) {
-    if (!allocation?.orderId) {
-      continue;
-    }
-    const allocationDate = new Date(allocation.date);
-    const current = latestByOrder.get(allocation.orderId);
-    if (!current || allocationDate > current) {
-      latestByOrder.set(allocation.orderId, allocationDate);
-    }
-  }
-  return selectedOrderIds.map((orderId) => {
-    const conflict = conflictById.get(orderId);
-    if (conflict) {
-      return conflict;
-    }
-    const fallbackDate = latestByOrder.get(orderId)
-      ?? state.preview?.finishDate
-      ?? state.preview?.request?.currentDate
-      ?? new Date();
-    return {
-      orderId,
-      reason: "preview selection includes order",
-      earliestFinishDate: fallbackDate,
-    };
-  });
-}
-
 function renderPreviewPage() {
   const pageList = document.getElementById("preview-page-list");
   const allocations = state.preview?.allocations ?? [];
   const conflicts = state.preview?.conflicts ?? [];
-  const displayConflicts = buildPreviewConflictList(conflicts, allocations);
   const manualForce = state.preview?.request?.manualForce ?? false;
   const canConfirmSchedule = state.preview?.kind === "schedule"
     && state.user?.role === "scheduler"
@@ -1309,7 +1271,7 @@ function renderPreviewPage() {
   document.getElementById("preview-detail-title").textContent = conflicts.length > 0 ? "衝突清單" : "分配明細";
   document.getElementById("close-preview-page").hidden = false;
   pageList.innerHTML = [
-    ...displayConflicts.map((conflict, index) => renderConflictItem(conflict, index, manualForce)),
+    ...conflicts.map((conflict, index) => renderConflictItem(conflict, index, manualForce)),
     renderConflictActions(conflicts, manualForce),
     renderSolutionNotice(allocations),
     ...allocations.map((allocation) => `
@@ -1413,6 +1375,8 @@ function renderConflictActions(conflicts, manualForce) {
 function renderConflictSolutionPicker(conflicts, selectedOrderIds) {
   const conflictOrderIds = Array.from(new Set(conflicts.map((conflict) => conflict.orderId)));
   const solutionOrderIds = Array.from(new Set([...(selectedOrderIds ?? []), ...conflictOrderIds])).sort();
+  const selectedSet = new Set(selectedOrderIds ?? []);
+  const hasSelection = selectedSet.size > 0;
   const affectedOrderIds = Array.from(new Set(conflicts.flatMap((conflict) => conflict.affectedOrderIds ?? []))).sort();
   const movableAffected = affectedOrderIds.filter(canMoveOrder);
   const blockedAffected = affectedOrderIds.filter((orderId) => !canMoveOrder(orderId));
@@ -1422,7 +1386,7 @@ function renderConflictSolutionPicker(conflicts, selectedOrderIds) {
       <div class="solution-choice-list">
         ${solutionOrderIds.map((orderId) => `
           <label class="check-option">
-            <input type="checkbox" data-conflict-solution-order value="${escapeHtml(orderId)}" checked>
+            <input type="checkbox" data-conflict-solution-order value="${escapeHtml(orderId)}" ${!hasSelection || selectedSet.has(orderId) ? "checked" : ""}>
             <span>排入 ${escapeHtml(orderId)}</span>
           </label>
         `).join("")}
